@@ -23,7 +23,7 @@ public struct Instruction : IEquatable<Instruction>
     public byte A
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        get => (byte)((_value >> 6) & 0xFF); // 8 bits
+        get => (byte)((_value >> 6) ); // 8 bits
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _value = (_value & 0xFFFFC03F) | (((uint)value & 0xFF) << 6);
     }
@@ -36,12 +36,24 @@ public struct Instruction : IEquatable<Instruction>
         set => _value = (_value & 0xC07FFFFF) | (((uint)value & 0x1FF) << 23);
     }
 
+    internal uint UIntB
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => (_value >> 23) & 0x1FF; // 9 bits
+    }
+
     public ushort C
     {
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get => (ushort)((_value >> 14) & 0x1FF); // 9 bits
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         set => _value = (_value & 0xFF803FFF) | (((uint)value & 0x1FF) << 14);
+    }
+
+    internal uint UIntC
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => (_value >> 14) & 0x1FF; // 9 bits
     }
 
     public uint Bx

@@ -37,12 +37,35 @@ public abstract class LuaThread
     {
         callStack.Push(frame);
     }
+    
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrame()
     {
-        var frame = callStack.Pop();
-        stack.PopUntil(frame.Base);
+        if (callStack.TryPop(out var frame))
+        {
+            stack.PopUntil(frame.Base);
+        }
+        else
+        {
+            ThrowInvalidOperation();
+            static void ThrowInvalidOperation() => throw new InvalidOperationException("Empty stack");
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void PopCallStackFrameFast(int franeBase)
+    {
+        if (callStack.TryPop())
+        {
+            stack.PopUntil(franeBase);
+        }
+        else
+        {
+            ThrowInvalidOperation();
+            static void ThrowInvalidOperation() => throw new InvalidOperationException("Empty stack");
+        }
+
     }
 
     internal void DumpStackValues()

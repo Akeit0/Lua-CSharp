@@ -1,4 +1,5 @@
 using System.Buffers;
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 
@@ -20,7 +21,7 @@ public static partial class LuaVirtualMachine
         public readonly Chunk RootChunk = chunk.GetRoot();
         public readonly CallStackFrame Frame = frame;
         public readonly CancellationToken CancellationToken = cancellationToken;
-        public int Pc;
+        public int Pc = -1;
         public Instruction Instruction;
         public bool Pushing;
         public int? ResultCount;
@@ -36,7 +37,8 @@ public static partial class LuaVirtualMachine
 
     static readonly PostOperation nopOperation = static (ref VirtualMachineExecutionContext _) => { };
 
-    internal async static ValueTask<int> ExecuteClosureAsync(LuaState state, CallStackFrame frame, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    [AsyncStateMachine(typeof(AsyncStateMachine))]
+    internal static ValueTask<int> ExecuteClosureAsync(LuaState state, CallStackFrame frame, Memory<LuaValue> buffer, CancellationToken cancellationToken)
     {
         var thread = state.CurrentThread;
         var closure = (Closure)frame.Function;
@@ -44,41 +46,154 @@ public static partial class LuaVirtualMachine
         var resultBuffer = ArrayPool<LuaValue>.Shared.Rent(1024);
 
         var context = new VirtualMachineExecutionContext(state, thread.Stack, resultBuffer, buffer, thread, chunk, frame, cancellationToken);
-        try
-        {
-            var instructions = chunk.Instructions;
 
-            while (context.ResultCount == null)
+        var stateMachine = new AsyncStateMachine
+        {
+            Context = context,
+            Builder = new()
+        };
+        stateMachine.Builder.Start(ref stateMachine);
+        return stateMachine.Builder.Task;
+    }
+    
+    
+    // //Asynchronous method implementation. 
+    // internal async static ValueTask<int> ExecuteClosureAsync(LuaState state, CallStackFrame frame, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    // {
+    //     var thread = state.CurrentThread;
+    //     var closure = (Closure)frame.Function;
+    //     var chunk = closure.Proto;
+    //     var resultBuffer = ArrayPool<LuaValue>.Shared.Rent(1024);
+    //
+    //     var context = new VirtualMachineExecutionContext(state, thread.Stack, resultBuffer, buffer, thread, chunk, frame, cancellationToken);
+    //     try
+    //     {
+    //         var instructions = chunk.Instructions;
+    //
+    //         while (context.ResultCount == null)
+    //         {
+    //             var instruction = instructions[++context.Pc];
+    //             context.Instruction = instruction;
+    //             var operation = operations[(int)instruction.OpCode];
+    //             var action = operation(ref context);
+    //             if (action != null)
+    //             {
+    //                 context.TaskResult = await context.Task;
+    //                 //if (context.Pushing) //Assuming context.Pushing is always true
+    //                 {
+    //                     context.Thread.PopCallStackFrame();
+    //                     context.Pushing = false;
+    //                 }
+    //                 action(ref context);
+    //             }
+    //         }
+    //
+    //         return context.ResultCount.Value;
+    //     }
+    //     catch (Exception)
+    //     {
+    //         if (context.Pushing) context.Thread.PopCallStackFrame();
+    //         context.State.CloseUpValues(context.Thread, context.Frame.Base);
+    //         throw;
+    //     }
+    //     finally
+    //     {
+    //         ArrayPool<LuaValue>.Shared.Return(context.ResultsBuffer);
+    //     }
+    // }
+    
+    /// <summary>
+    /// Manual implementation of the async state machine
+    /// </summary>
+    [StructLayout(LayoutKind.Auto)]
+    struct AsyncStateMachine : IAsyncStateMachine
+    {
+        enum State
+        {
+            Running = 0,
+            //Await is the state where the task is awaited
+            Await,
+            //End is the state where the function is done
+            End
+        }
+
+        public VirtualMachineExecutionContext Context;
+        public AsyncValueTaskMethodBuilder<int> Builder;
+        State state;
+        ValueTaskAwaiter<int> awaiter;
+        PostOperation? postOperation;
+
+        public void MoveNext()
+        {
+            ref var context = ref Context;
+            try
             {
-                var instruction = instructions[context.Pc];
-                context.Instruction = instruction;
-                var operation = operations[(int)instruction.OpCode];
-                var action = operation(ref context);
-                if (action != null)
+                //If the state is await, task is done, so this executes the post operation and set the state to running
+                if (state == State.Await)
                 {
-                    context.TaskResult = await context.Task;
-                    //if (context.Pushing) //Assuming context.Pushing is always true
+                    context.TaskResult = awaiter.GetResult();
+                    awaiter = default;
+                    //Pop the call stack frame because the function task is done
+                    context.Thread.PopCallStackFrame();
+                    context.Pushing = false;
+                    postOperation!(ref context);
+                    postOperation = null;
+                    state = State.Running;
+                }
+                //If the state is end, the function is done, so set the result and return. I think this state is not reachable in this implementation
+                else if (state == State.End)
+                {
+                    Builder.SetResult(context.ResultCount ?? 0);
+                    return;
+                }
+                var instructions = context.Chunk.Instructions;
+                while (context.ResultCount == null)
+                {
+                    var instruction = instructions[++context.Pc];
+                    context.Instruction = instruction;
+                    var action = operations[(byte)instruction.OpCode](ref context);
+                    //If the action is null, task is not returned so continue to the next instruction
+                    if (action == null) continue;
+                    awaiter = context.Task.GetAwaiter();
+                    //Directly execute the action if the awaiter is already completed
+                    if (awaiter.IsCompleted)
                     {
+                        context.TaskResult = awaiter.GetResult();
+                        awaiter = default;
                         context.Thread.PopCallStackFrame();
                         context.Pushing = false;
+
+                        action(ref context);
                     }
-                    action(ref context);
+                    //Otherwise, set the state to await and return with setting this method as the task's continuation
+                    else
+                    {
+                        postOperation = action;
+                        state = State.Await;
+                        Builder.AwaitOnCompleted(ref awaiter, ref this);
+                        return;
+                    }
                 }
-
-                context.Pc++;
+                //If the result count is set, this function is done, so set the result and set the state to end
+                state = State.End;
+                ArrayPool<LuaValue>.Shared.Return(context.ResultsBuffer);
+                Builder.SetResult(context.ResultCount.Value);
             }
+            catch (Exception e)
+            {
+                if (context.Pushing) context.Thread.PopCallStackFrame();
+                context.State.CloseUpValues(context.Thread, context.Frame.Base);
+                ArrayPool<LuaValue>.Shared.Return(context.ResultsBuffer);
+                state = State.End;
+                context = default;
+                Builder.SetException(e);
+            }
+        }
 
-            return context.ResultCount.Value;
-        }
-        catch (Exception)
+        [DebuggerHidden]
+        public void SetStateMachine(IAsyncStateMachine stateMachine)
         {
-            if (context.Pushing) context.Thread.PopCallStackFrame();
-            context.State.CloseUpValues(context.Thread, context.Frame.Base);
-            throw;
-        }
-        finally
-        {
-            ArrayPool<LuaValue>.Shared.Return(context.ResultsBuffer);
+            Builder.SetStateMachine(stateMachine);
         }
     }
 
@@ -432,54 +547,17 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadDouble(out var valueB) && vc.TryReadDouble(out var valueC))
             {
                 Unsafe.Add(ref stackHead, RA) = valueB + valueC;
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Add, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "add", vb, vc);
-            }
-
-            return null;
+            
+            return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Add, "add");
         }
 
         PostOperation? Sub(ref VirtualMachineExecutionContext context)
@@ -490,54 +568,17 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadDouble(out var valueB) && vc.TryReadDouble(out var valueC))
             {
                 Unsafe.Add(ref stackHead, RA) = valueB - valueC;
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Sub, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "sub", vb, vc);
-            }
-
-            return null;
+            
+            return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Sub, "sub");
         }
 
         PostOperation? Mul(ref VirtualMachineExecutionContext context)
@@ -548,54 +589,17 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadDouble(out var valueB) && vc.TryReadDouble(out var valueC))
             {
                 Unsafe.Add(ref stackHead, RA) = valueB * valueC;
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Mul, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "mul", vb, vc);
-            }
-
-            return null;
+            
+            return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Mul, "mul");
         }
 
         PostOperation? Div(ref VirtualMachineExecutionContext context)
@@ -606,54 +610,17 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadDouble(out var valueB) && vc.TryReadDouble(out var valueC))
             {
                 Unsafe.Add(ref stackHead, RA) = valueB / valueC;
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Div, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "div", vb, vc);
-            }
-
-            return null;
+            
+            return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Div, "div");
         }
 
         PostOperation? Mod(ref VirtualMachineExecutionContext context)
@@ -664,9 +631,8 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadDouble(out var valueB) && vc.TryReadDouble(out var valueC))
             {
@@ -678,46 +644,10 @@ public static partial class LuaVirtualMachine
 
                 Unsafe.Add(ref stackHead, RA) = mod;
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Mod, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "mod", vb, vc);
-            }
-
-            return null;
+            
+            return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Mod, "mod");
         }
 
         PostOperation? Pow(ref VirtualMachineExecutionContext context)
@@ -728,55 +658,17 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadDouble(out var valueB) && vc.TryReadDouble(out var valueC))
             {
                 Unsafe.Add(ref stackHead, RA) = Math.Pow(valueB, valueC);
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Pow, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "pow", vb, vc);
-            }
-
-            return null;
+            
+            return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Pow, "pow");
         }
 
         PostOperation? Unm(ref VirtualMachineExecutionContext context)
@@ -786,55 +678,16 @@ public static partial class LuaVirtualMachine
             var RA = instruction.A + context.Frame.Base;
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
-            var chunk = context.Chunk;
-            var frame = context.Frame;
-            var RB = instruction.B + frame.Base;
+            var RB = instruction.B + context.Frame.Base;
             var vb = Unsafe.Add(ref stackHead, RB);
 
             if (vb.TryReadDouble(out var valueB))
             {
                 Unsafe.Add(ref stackHead, RA) = -valueB;
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Unm, out var metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 1,
-                    FrameBase = stack.Count - 1,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "unm", vb);
-            }
-
-            return null;
+            return ExecuteUnaryOperationMetaMethod(vb, ref context, Metamethods.Unm, "unm",false);
         }
 
         PostOperation? Not(ref VirtualMachineExecutionContext context)
@@ -842,7 +695,6 @@ public static partial class LuaVirtualMachine
             var instruction = context.Instruction;
             var stack = context.Stack;
             var RA = instruction.A + context.Frame.Base;
-
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var RB = instruction.B + context.Frame.Base;
@@ -859,9 +711,7 @@ public static partial class LuaVirtualMachine
             var RA = instruction.A + context.Frame.Base;
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
-            var chunk = context.Chunk;
-            var frame = context.Frame;
-            var RB = instruction.B + frame.Base;
+            var RB = instruction.B + context.Frame.Base;
             var vb = Unsafe.Add(ref stackHead, RB);
 
             if (vb.TryReadString(out var str))
@@ -870,51 +720,7 @@ public static partial class LuaVirtualMachine
                 stack.NotifyTop(RA + 1);
                 return null;
             }
-
-            if (vb.TryGetMetamethod(context.State, Metamethods.Len, out var metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 1,
-                    FrameBase = stack.Count - 1,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else if (vb.TryReadTable(out var table))
-            {
-                Unsafe.Add(ref stackHead, RA) = table.ArrayLength;
-                stack.NotifyTop(RA + 1);
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "get length of", vb);
-            }
-
-            return null;
+            return ExecuteUnaryOperationMetaMethod(vb, ref context, Metamethods.Len, "get length of",true);
         }
 
         PostOperation? Concat(ref VirtualMachineExecutionContext context)
@@ -925,9 +731,8 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             var bIsValid = vb.TryReadString(out var strB);
             var cIsValid = vc.TryReadString(out var strC);
@@ -948,47 +753,9 @@ public static partial class LuaVirtualMachine
             {
                 stack.Get(RA) = strB + strC;
                 stack.NotifyTop(RA + 1);
+                return null;
             }
-            else if (vb.TryGetMetamethod(context.State, Metamethods.Pow, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var stack = context.Stack;
-                    var RA = context.Instruction.A + context.Frame.Base;
-                    stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
-                    stack.NotifyTop(RA + 1);
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "pow", vb, vc);
-            }
-
-            return null;
+            return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Concat, "concat");
         }
 
         PostOperation? Jmp(ref VirtualMachineExecutionContext context)
@@ -1011,53 +778,20 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
-
-            var compareResult = vb == vc;
-            if (!compareResult && (vb.TryGetMetamethod(context.State, Metamethods.Eq, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod)))
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
+            
+            if (vb == vc)
             {
-                if (!metamethod.TryReadFunction(out var func))
+                if (instruction.A != 1)
                 {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
+                    context.Pc++;
                 }
 
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var compareResult = context.ResultCount != 0 && context.ResultsBuffer[0].ToBoolean();
-                    if (compareResult != (context.Instruction.A == 1))
-                    {
-                        context.Pc++;
-                    }
-                };
+                return null;
             }
-
-            if (compareResult != (instruction.A == 1))
-            {
-                context.Pc++;
-            }
-
-            return null;
+            
+            return ExecuteCompareOperationMetaMethod(vb, vc, ref context,Metamethods.Eq,null);
         }
 
         PostOperation? Lt(ref VirtualMachineExecutionContext context)
@@ -1068,66 +802,32 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
-
-            var compareResult = false;
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadString(out var strB) && vc.TryReadString(out var strC))
             {
-                compareResult = StringComparer.Ordinal.Compare(strB, strC) < 0;
+               var compareResult = StringComparer.Ordinal.Compare(strB, strC) < 0;
+               if (compareResult != (instruction.A == 1))
+               {
+                   context.Pc++;
+               }
+
+               return null;
             }
-            else if (vb.TryReadNumber(out var valueB) && vc.TryReadNumber(out var valueC))
+
+            if (vb.TryReadNumber(out var valueB) && vc.TryReadNumber(out var valueC))
             {
-                compareResult = valueB < valueC;
+               var  compareResult = valueB < valueC;
+               if (compareResult != (instruction.A == 1))
+               {
+                   context.Pc++;
+               }
+
+               return null;
             }
-            else if (!compareResult && (vb.TryGetMetamethod(context.State, Metamethods.Lt, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod)))
-            {
-                if (!metamethod.TryReadFunction(out var func))
-                {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
-                }
-
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var compareResult = context.ResultCount != 0 && context.ResultsBuffer[0].ToBoolean();
-                    if (compareResult != (context.Instruction.A == 1))
-                    {
-                        context.Pc++;
-                    }
-                };
-            }
-            else
-            {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "less than", vb, vc);
-            }
-
-            if (compareResult != (instruction.A == 1))
-            {
-                context.Pc++;
-            }
-
-            return null;
+            
+            return ExecuteCompareOperationMetaMethod(vb, vc, ref context,Metamethods.Lt,"less than");
         }
 
         PostOperation? Le(ref VirtualMachineExecutionContext context)
@@ -1138,66 +838,32 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(RA + 1);
             ref var stackHead = ref stack.Get(0);
             var chunk = context.Chunk;
-            var frame = context.Frame;
-            var vb = RK(ref stackHead, chunk, instruction.B, frame.Base);
-            var vc = RK(ref stackHead, chunk, instruction.C, frame.Base);
-
-            var compareResult = false;
+            var vb = RK(ref stackHead, chunk, instruction.B, context.Frame.Base);
+            var vc = RK(ref stackHead, chunk, instruction.C, context.Frame.Base);
 
             if (vb.TryReadString(out var strB) && vc.TryReadString(out var strC))
             {
-                compareResult = StringComparer.Ordinal.Compare(strB, strC) <= 0;
-            }
-            else if (vb.TryReadNumber(out var valueB) && vc.TryReadNumber(out var valueC))
-            {
-                compareResult = valueB <= valueC;
-            }
-            else if (!compareResult && (vb.TryGetMetamethod(context.State, Metamethods.Le, out var metamethod) || vc.TryGetMetamethod(context.State, Metamethods.Add, out metamethod)))
-            {
-                if (!metamethod.TryReadFunction(out var func))
+                var compareResult = StringComparer.Ordinal.Compare(strB, strC) <= 0; 
+                if (compareResult != (instruction.A == 1))
                 {
-                    LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
+                    context.Pc++;
                 }
 
-                var rootChunk = context.RootChunk;
-                var state = context.State;
-                var thread = context.Thread;
-                var cancellationToken = context.CancellationToken;
-                stack.Push(vb);
-                stack.Push(vc);
-
-                context.Pushing = true;
-                context.Task = func.InvokeAsyncPushOnly(new()
-                {
-                    State = state,
-                    Thread = thread,
-                    ArgumentCount = 2,
-                    FrameBase = stack.Count - 2,
-                    SourcePosition = chunk.SourcePositions[context.Pc],
-                    ChunkName = chunk.Name,
-                    RootChunkName = rootChunk.Name,
-                }, context.ResultsBuffer.AsMemory(), cancellationToken);
-
-                return static (ref VirtualMachineExecutionContext context) =>
-                {
-                    var compareResult = context.ResultCount != 0 && context.ResultsBuffer[0].ToBoolean();
-                    if (compareResult != (context.Instruction.A == 1))
-                    {
-                        context.Pc++;
-                    }
-                };
+                return null;
             }
-            else
+            
+            if (vb.TryReadNumber(out var valueB) && vc.TryReadNumber(out var valueC))
             {
-                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "less than or equals", vb, vc);
-            }
+                var  compareResult = valueB <= valueC;
+                if (compareResult != (instruction.A == 1))
+                {
+                    context.Pc++;
+                }
 
-            if (compareResult != (instruction.A == 1))
-            {
-                context.Pc++;
+                return null;
             }
-
-            return null;
+            
+            return ExecuteCompareOperationMetaMethod(vb, vc, ref context,Metamethods.Le,"less than or equals");
         }
 
         PostOperation? Test(ref VirtualMachineExecutionContext context)
@@ -1219,7 +885,6 @@ public static partial class LuaVirtualMachine
             var instruction = context.Instruction;
             var stack = context.Stack;
             var RA = instruction.A + context.Frame.Base;
-
             var RB = instruction.B + context.Frame.Base;
             if (stack.Get(RB).ToBoolean() != (instruction.C == 1))
             {
@@ -1239,7 +904,6 @@ public static partial class LuaVirtualMachine
             var instruction = context.Instruction;
             var stack = context.Stack;
             var RA = instruction.A + context.Frame.Base;
-
             var va = stack.Get(RA);
             if (!va.TryReadFunction(out var func))
             {
@@ -1254,7 +918,7 @@ public static partial class LuaVirtualMachine
 
             var chunk = context.Chunk;
             var thread = context.Thread;
-            var (newBase, argumentCount) = PrepareForFunctionCall(thread, func, instruction, RA,  false);
+            var (newBase, argumentCount) = PrepareForFunctionCall(thread, func, instruction, RA, false);
 
             var callPosition = chunk.SourcePositions[context.Pc];
             var chunkName = chunk.Name ?? LuaState.DefaultChunkName;
@@ -1327,8 +991,7 @@ public static partial class LuaVirtualMachine
             var state = context.State;
             var thread = context.Thread;
 
-            var frame = context.Frame;
-            state.CloseUpValues(thread, frame.Base);
+            state.CloseUpValues(thread, context.Frame.Base);
 
             var va = stack.Get(RA);
             if (!va.TryReadFunction(out var func))
@@ -1644,8 +1307,149 @@ public static partial class LuaVirtualMachine
 
         return false;
     }
+
+    static PostOperation? ExecuteBinaryOperationMetaMethod(LuaValue vb,LuaValue vc,ref VirtualMachineExecutionContext context, string name,string description)
+    {
+        if (vb.TryGetMetamethod(context.State, name, out var metamethod) || vc.TryGetMetamethod(context.State, name, out metamethod))
+        {
+            if (!metamethod.TryReadFunction(out var func))
+            {
+                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
+            }
+
+            var rootChunk = context.RootChunk;
+            var state = context.State;
+            var thread = context.Thread;
+            var cancellationToken = context.CancellationToken;
+            var stack = context.Stack;
+            stack.Push(vb);
+            stack.Push(vc);
+            context.Pushing = true;
+            context.Task = func.InvokeAsyncPushOnly(new()
+            {
+                State = state,
+                Thread = thread,
+                ArgumentCount = 2,
+                FrameBase = stack.Count - 2,
+                SourcePosition = context.Chunk.SourcePositions[context.Pc],
+                ChunkName = context.Chunk.Name,
+                RootChunkName = rootChunk.Name,
+            }, context.ResultsBuffer.AsMemory(), cancellationToken);
+
+            return static (ref VirtualMachineExecutionContext context) =>
+            {
+                var stack = context.Stack;
+                var RA = context.Instruction.A + context.Frame.Base;
+                stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
+                stack.NotifyTop(RA + 1);
+            };
+        }
+            
+        LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), description, vb, vc);
+        return null;
+    }
     
+    static PostOperation? ExecuteUnaryOperationMetaMethod(LuaValue vb,ref VirtualMachineExecutionContext context, string name,string description,bool isLen)
+    {
+        var stack = context.Stack;
+        if (vb.TryGetMetamethod(context.State, name, out var metamethod))
+        {
+            if (!metamethod.TryReadFunction(out var func))
+            {
+                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
+            }
+
+            var rootChunk = context.RootChunk;
+            var state = context.State;
+            var thread = context.Thread;
+            var cancellationToken = context.CancellationToken;
+           
+            stack.Push(vb);
+            context.Pushing = true;
+            context.Task = func.InvokeAsyncPushOnly(new()
+            {
+                State = state,
+                Thread = thread,
+                ArgumentCount = 1,
+                FrameBase = stack.Count - 1,
+                SourcePosition = context.Chunk.SourcePositions[context.Pc],
+                ChunkName = context.Chunk.Name,
+                RootChunkName = rootChunk.Name,
+            }, context.ResultsBuffer.AsMemory(), cancellationToken);
+
+            return static (ref VirtualMachineExecutionContext context) =>
+            {
+                var stack = context.Stack;
+                var RA = context.Instruction.A + context.Frame.Base;
+                stack.Get(RA) = context.TaskResult == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
+                stack.NotifyTop(RA + 1);
+            };
+        }
+
+        if (isLen && vb.TryReadTable(out var table))
+        {
+            var RA = context.Instruction.A + context.Frame.Base;
+            stack.Get(RA) = table.ArrayLength;
+            stack.NotifyTop(RA + 1);
+            return null;
+        }
+            
+        LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), description, vb);
+        return null;
+    }
     
+    static PostOperation? ExecuteCompareOperationMetaMethod(LuaValue vb,LuaValue vc,ref VirtualMachineExecutionContext context, string name,string? description)
+    {
+        if (vb.TryGetMetamethod(context.State, name, out var metamethod) || vc.TryGetMetamethod(context.State, name, out metamethod))
+        {
+            if (!metamethod.TryReadFunction(out var func))
+            {
+                LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", metamethod);
+            }
+
+            var rootChunk = context.RootChunk;
+            var state = context.State;
+            var thread = context.Thread;
+            var cancellationToken = context.CancellationToken;
+            var stack = context.Stack;
+            stack.Push(vb);
+            stack.Push(vc);
+            context.Pushing = true;
+            context.Task = func.InvokeAsyncPushOnly(new()
+            {
+                State = state,
+                Thread = thread,
+                ArgumentCount = 2,
+                FrameBase = stack.Count - 2,
+                SourcePosition = context.Chunk.SourcePositions[context.Pc],
+                ChunkName = context.Chunk.Name,
+                RootChunkName = rootChunk.Name,
+            }, context.ResultsBuffer.AsMemory(), cancellationToken);
+
+            return static (ref VirtualMachineExecutionContext context) =>
+            {
+                var compareResult = context.ResultCount != 0 && context.ResultsBuffer[0].ToBoolean();
+                if (compareResult != (context.Instruction.A == 1))
+                {
+                    context.Pc++;
+                }
+            };
+        }
+        
+        if(description!=null)
+        {
+            LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), description, vb, vc);
+        }
+        else
+        {
+            if (context.Instruction.A == 1)
+            {
+                context.Pc++;
+            }
+        }
+        return null;
+    }
+
     static (int FrameBase, int ArgumentCount) PrepareForFunctionCall(LuaThread thread, LuaFunction function, Instruction instruction, int RA, bool isTailCall)
     {
         var stack = thread.Stack;
@@ -1663,7 +1467,7 @@ public static partial class LuaVirtualMachine
         if (isTailCall)
         {
             var currentBase = thread.GetCurrentFrame().Base;
-            
+
             var stackBuffer = stack.GetBuffer();
             stackBuffer.Slice(newBase, argumentCount).CopyTo(stackBuffer.Slice(currentBase, argumentCount));
             newBase = currentBase;
@@ -1681,9 +1485,9 @@ public static partial class LuaVirtualMachine
             stack.EnsureCapacity(newBase + argumentCount);
             stack.NotifyTop(newBase + argumentCount);
 
-             var stackBuffer = stack.GetBuffer()[temp..];
-             stackBuffer[..argumentCount].CopyTo(stackBuffer[variableArgumentCount..]);
-             stackBuffer.Slice( argumentCount , variableArgumentCount).CopyTo(stackBuffer);
+            var stackBuffer = stack.GetBuffer()[temp..];
+            stackBuffer[..argumentCount].CopyTo(stackBuffer[variableArgumentCount..]);
+            stackBuffer.Slice(argumentCount, variableArgumentCount).CopyTo(stackBuffer);
         }
 
         return (newBase, argumentCount);
@@ -1693,7 +1497,7 @@ public static partial class LuaVirtualMachine
     {
         return GetTracebacks(context.State, context.Chunk, context.Pc);
     }
-    
+
     static Traceback GetTracebacks(LuaState state, Chunk chunk, int pc)
     {
         var frame = state.CurrentThread.GetCurrentFrame();
