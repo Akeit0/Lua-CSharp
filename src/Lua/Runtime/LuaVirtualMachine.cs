@@ -69,8 +69,20 @@ public static partial class LuaVirtualMachine
                 //Console.WriteLine($"Pop  CallStack TailCall {frames.Length}");
                 goto Re;
             }
+            //if(callInstruction.OpCode is OpCode.Add or S)
             FrameBase = lastFrame.Base;
             VariableArgumentCount = lastFrame.VariableArgumentCount;
+            
+            if(callInstruction.OpCode is OpCode.Eq or OpCode.Le or OpCode.Lt)
+            {
+                var compareResult = count != 0 && Stack.Get(src).ToBoolean();
+                if (compareResult != (callInstruction.A == 1))
+                {
+                    Pc++;
+                }
+                Thread.PopCallStackFrameFast(frame.Base);
+                return true;
+            }
             var target = callInstruction.A + FrameBase;
 
             if (count > 0)
@@ -184,6 +196,7 @@ public static partial class LuaVirtualMachine
     internal static ValueTask<int> ExecuteClosureAsync(LuaState luaState, Memory<LuaValue> buffer,
         CancellationToken cancellationToken)
     {
+        Console.WriteLine("[ExecuteClosureAsync]");
         var thread = luaState.CurrentThread;
         ref readonly var frame = ref thread.GetCallStackFrames()[^1];
         var resultBuffer = GetResultsBuffer();
@@ -381,8 +394,9 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (TryGetMetaTableValue(table, vc, ref context))
+                            if (TryGetMetaTableValue(table, vc, ref context,out var doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 if (context.Awaiter.IsCompleted)
                                 {
                                     context.Awaiter = default;
@@ -422,8 +436,9 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (TryGetMetaTableValue(table, vc, ref context))
+                            if (TryGetMetaTableValue(table, vc, ref context,out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 if (context.Awaiter.IsCompleted)
                                 {
                                     context.Awaiter = default;
@@ -470,8 +485,9 @@ public static partial class LuaVirtualMachine
                             }
 
                             vc = ref RKC(ref stackHead, ref constHead, instruction);
-                            if (TrySetMetaTableValue(table, vb, vc, ref context))
+                            if (TrySetMetaTableValue(table, vb, vc, ref context,out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 postOperation = PostOperationType.Nop;
                                 break;
                             }
@@ -497,13 +513,25 @@ public static partial class LuaVirtualMachine
 
                             if (table.TryReadTable(out luaTable))
                             {
-                                luaTable[vb] = RKC(ref stackHead, ref constHead, instruction);
-                                continue;
+                                
+                                if(luaTable.Metatable==null||!luaTable.Metatable!.ContainsKey(Metamethods.NewIndex))
+                                {
+                                    luaTable[vb] = RKC(ref stackHead, ref constHead, instruction);
+                                    continue;
+                                }
+
+                                if (luaTable.ContainsKey(vb))
+                                {
+                                    luaTable[vb] = RKC(ref stackHead, ref constHead, instruction);
+                                    continue;
+                                }
+                                
                             }
 
                             vc = ref RKC(ref stackHead, ref constHead, instruction);
-                            if (TrySetMetaTableValue(table, vb, vc, ref context))
+                            if (TrySetMetaTableValue(table, vb, vc, ref context,out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 postOperation = PostOperationType.Nop;
                                 break;
                             }
@@ -531,8 +559,9 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (TryGetMetaTableValue(table, vc, ref context))
+                            if (TryGetMetaTableValue(table, vc, ref context,out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 if (context.Awaiter.IsCompleted)
                                 {
                                     context.Awaiter = default;
@@ -570,7 +599,7 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Add, "add",out var doRestart))
+                            if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Add, "add",out  doRestart))
                             {
                                 if(doRestart) goto Restart;
                                 continue;
@@ -699,8 +728,9 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (ExecuteUnaryOperationMetaMethod(vb, ref context, Metamethods.Unm, "unm", false))
+                            if (ExecuteUnaryOperationMetaMethod(vb, ref context, Metamethods.Unm, "unm", false,out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 continue;
                             }
 
@@ -727,8 +757,9 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (ExecuteUnaryOperationMetaMethod(vb, ref context, Metamethods.Len, "get length of", true))
+                            if (ExecuteUnaryOperationMetaMethod(vb, ref context, Metamethods.Len, "get length of", true,out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 continue;
                             }
 
@@ -761,12 +792,12 @@ public static partial class LuaVirtualMachine
                                 {
                                     context.Pc++;
                                 }
-
                                 continue;
                             }
 
-                            if (ExecuteCompareOperationMetaMethod(vb, vc, ref context, Metamethods.Eq, null))
+                            if (ExecuteCompareOperationMetaMethod(vb, vc, ref context, Metamethods.Eq, null,out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 continue;
                             }
 
@@ -801,8 +832,9 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (ExecuteCompareOperationMetaMethod(vb, vc, ref context, Metamethods.Lt, "less than"))
+                            if (ExecuteCompareOperationMetaMethod(vb, vc, ref context, Metamethods.Lt, "less than",out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 continue;
                             }
 
@@ -837,8 +869,9 @@ public static partial class LuaVirtualMachine
                                 continue;
                             }
 
-                            if (ExecuteCompareOperationMetaMethod(vb, vc, ref context, Metamethods.Le, "less than or equals"))
+                            if (ExecuteCompareOperationMetaMethod(vb, vc, ref context, Metamethods.Le, "less than or equals",out doRestart))
                             {
+                                if(doRestart) goto Restart;
                                 continue;
                             }
 
@@ -1137,43 +1170,43 @@ public static partial class LuaVirtualMachine
         // {
         //     return FastCall(ref context, fastFunction, newBase, argumentCount);
         // }
-#if NET6_0_OR_GREATER
-        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
-#endif
-        static bool FastCall(ref VirtualMachineExecutionContext context, FastFunction fastFunction, int newBase, int argumentCount)
-        {
-            {
-                var buffer = context.Stack.GetBuffer();
-                var ra = context.Instruction.A + context.FrameBase;
-                var fastContext = new FastFunctionContext()
-                {
-                    State = context.State,
-                    Arguments = buffer.Slice(newBase, argumentCount),
-                    ResultBuffer = buffer.Slice(ra),
-                };
-                var rawResultCount = fastFunction.InvokeFast(fastContext);
-                var resultCount = rawResultCount;
-                context.Thread.PopCallStackFrameFast(newBase);
-                //context.Pushing = false;
-                var ic = context.Instruction.C;
-                if (ic != 0)
-                {
-                    resultCount = ic - 1;
-                }
-            
-                if (resultCount == 0)
-                {
-                    context.Stack.Pop();
-                }
-            
-                if (resultCount != rawResultCount)
-                {
-                    buffer.Slice(ra + resultCount, rawResultCount - resultCount).Clear();
-                }
-            
-                return true;
-            }
-        }
+// #if NET6_0_OR_GREATER
+//         [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
+// #endif
+//         static bool FastCall(ref VirtualMachineExecutionContext context, FastFunction fastFunction, int newBase, int argumentCount)
+//         {
+//             {
+//                 var buffer = context.Stack.GetBuffer();
+//                 var ra = context.Instruction.A + context.FrameBase;
+//                 var fastContext = new FastFunctionContext()
+//                 {
+//                     State = context.State,
+//                     Arguments = buffer.Slice(newBase, argumentCount),
+//                     ResultBuffer = buffer.Slice(ra),
+//                 };
+//                 var rawResultCount = fastFunction.InvokeFast(fastContext);
+//                 var resultCount = rawResultCount;
+//                 context.Thread.PopCallStackFrameFast(newBase);
+//                 //context.Pushing = false;
+//                 var ic = context.Instruction.C;
+//                 if (ic != 0)
+//                 {
+//                     resultCount = ic - 1;
+//                 }
+//             
+//                 if (resultCount == 0)
+//                 {
+//                     context.Stack.Pop();
+//                 }
+//             
+//                 if (resultCount != rawResultCount)
+//                 {
+//                     buffer.Slice(ra + resultCount, rawResultCount - resultCount).Clear();
+//                 }
+//             
+//                 return true;
+//             }
+//         }
 
 #if NET6_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
@@ -1471,8 +1504,9 @@ public static partial class LuaVirtualMachine
     }
 
 
-    static bool TryGetMetaTableValue(LuaValue table, LuaValue key, ref VirtualMachineExecutionContext context)
+    static bool TryGetMetaTableValue(LuaValue table, LuaValue key, ref VirtualMachineExecutionContext context,out bool doRestart)
     {
+        doRestart = false;
         var state = context.State;
         if (table.TryGetMetamethod(state, Metamethods.Index, out var metamethod))
         {
@@ -1484,9 +1518,30 @@ public static partial class LuaVirtualMachine
             var stack = context.Stack;
             stack.Push(table);
             stack.Push(key);
+            
+            
+            var newCallFrame = new CallStackFrame()
+            {
+                Base = stack.Count - 2,
+                CallPosition = context.Chunk.SourcePositions[context.Pc],
+                ChunkName = context.Chunk.Name,
+                RootChunkName = context.Chunk.GetRoot().Name,
+                Function = indexTable,
+                CallerInstructionIndex = context.Pc,
+                VariableArgumentCount = 0
+            };
+            
+            context.Thread.PushCallStackFrame(newCallFrame);
+            
+            if (indexTable.IsClosure)
+            {
+                context.Push(newCallFrame);
+                doRestart = true;
+                return true;
+            }
             //context.Pushing = true;
 
-            var task = indexTable.InvokeAsyncPushOnly(new()
+            var task = indexTable.Func(new()
             {
                 State = state,
                 Thread = context.Thread,
@@ -1506,8 +1561,9 @@ public static partial class LuaVirtualMachine
     }
 
     static bool TrySetMetaTableValue(LuaValue table, LuaValue key, LuaValue value,
-        ref VirtualMachineExecutionContext context)
+        ref VirtualMachineExecutionContext context, out bool doRestart)
     {
+        doRestart = false;
         var state = context.State;
         if (table.TryGetMetamethod(state, Metamethods.NewIndex, out var metamethod))
         {
@@ -1521,8 +1577,28 @@ public static partial class LuaVirtualMachine
             stack.Push(table);
             stack.Push(key);
             stack.Push(value);
+            var newCallFrame = new CallStackFrame()
+            {
+                Base = stack.Count - 3,
+                CallPosition = context.Chunk.SourcePositions[context.Pc],
+                ChunkName = context.Chunk.Name,
+                RootChunkName = context.Chunk.GetRoot().Name,
+                Function = indexTable,
+                CallerInstructionIndex = context.Pc,
+                VariableArgumentCount = 0
+            };
+            
+            context.Thread.PushCallStackFrame(newCallFrame);
+            
+            if (indexTable.IsClosure)
+            {
+                context.Push(newCallFrame);
+                doRestart = true;
+                return true;
+            }
+            
             //context.Pushing = true;
-            var task = indexTable.InvokeAsyncPushOnly(new()
+            var task = indexTable.Func(new()
             {
                 State = state,
                 Thread = thread,
@@ -1584,12 +1660,13 @@ public static partial class LuaVirtualMachine
                 Thread = context.Thread,
                 ArgumentCount = 2,
                 FrameBase = stack.Count - 2,
-                SourcePosition = context.Chunk.SourcePositions[context.Pc],
-                ChunkName = context.Chunk.Name,
-                RootChunkName = context.Chunk.GetRoot().Name,
+                SourcePosition = newCallFrame.CallPosition,
+                ChunkName = newCallFrame.ChunkName,
+                RootChunkName = newCallFrame.RootChunkName,
                 CallerInstructionIndex = context.Pc,
             }, context.ResultsBuffer.AsMemory(), context.CancellationToken);
             context.Awaiter = task.GetAwaiter();
+            
             if (context.Awaiter.IsCompleted)
             {
                 var taskResult = context.Awaiter.GetResult();
@@ -1609,8 +1686,9 @@ public static partial class LuaVirtualMachine
     }
 
     static bool ExecuteUnaryOperationMetaMethod(LuaValue vb, ref VirtualMachineExecutionContext context,
-        string name, string description, bool isLen)
+        string name, string description, bool isLen,out bool doRestart)
     {
+        doRestart = false;
         var stack = context.Stack;
         if (vb.TryGetMetamethod(context.State, name, out var metamethod))
         {
@@ -1620,15 +1698,37 @@ public static partial class LuaVirtualMachine
             }
 
             stack.Push(vb);
-            var task = func.InvokeAsyncPushOnly(new()
+            var newCallFrame = new CallStackFrame()
+            {
+                Base = stack.Count - 1,
+                CallPosition = context.Chunk.SourcePositions[context.Pc],
+                ChunkName = context.Chunk.Name,
+                RootChunkName = context.Chunk.GetRoot().Name,
+                Function = func,
+                CallerInstructionIndex = context.Pc,
+                VariableArgumentCount = 0
+            };
+            
+            context.Thread.PushCallStackFrame(newCallFrame);
+
+            if (func.IsClosure)
+            {
+                context.Push(newCallFrame);
+                doRestart = true;
+                return true;
+            }
+            
+            
+            //  context.Pushing = true;
+            var task = func.Func(new()
             {
                 State = context.State,
                 Thread = context.Thread,
                 ArgumentCount = 1,
                 FrameBase = stack.Count - 1,
-                SourcePosition = context.Chunk.SourcePositions[context.Pc],
-                ChunkName = context.Chunk.Name,
-                RootChunkName = context.Chunk.GetRoot().Name,
+                SourcePosition = newCallFrame.CallPosition,
+                ChunkName = newCallFrame.ChunkName,
+                RootChunkName = newCallFrame.RootChunkName,
                 CallerInstructionIndex = context.Pc,
             }, context.ResultsBuffer.AsMemory(), context.CancellationToken);
 
@@ -1660,8 +1760,9 @@ public static partial class LuaVirtualMachine
     }
 
     static bool ExecuteCompareOperationMetaMethod(LuaValue vb, LuaValue vc,
-        ref VirtualMachineExecutionContext context, string name, string? description)
+        ref VirtualMachineExecutionContext context, string name, string? description,out bool doRestart)
     {
+        doRestart = false;
         if (vb.TryGetMetamethod(context.State, name, out var metamethod) ||
             vc.TryGetMetamethod(context.State, name, out metamethod))
         {
@@ -1673,7 +1774,27 @@ public static partial class LuaVirtualMachine
             var stack = context.Stack;
             stack.Push(vb);
             stack.Push(vc);
-            var task = func.InvokeAsyncPushOnly(new()
+            var newCallFrame = new CallStackFrame()
+            {
+                Base = stack.Count - 2,
+                CallPosition = context.Chunk.SourcePositions[context.Pc],
+                ChunkName = context.Chunk.Name,
+                RootChunkName = context.Chunk.GetRoot().Name,
+                Function = func,
+                CallerInstructionIndex = context.Pc,
+                VariableArgumentCount = 0
+            };
+            
+            context.Thread.PushCallStackFrame(newCallFrame);
+            
+            if (func.IsClosure)
+            {
+                context.Push(newCallFrame);
+                doRestart = true;
+                return true;
+            }
+            
+            var task = func.Func(new()
             {
                 State = context.State,
                 Thread = context.Thread,
@@ -1685,6 +1806,7 @@ public static partial class LuaVirtualMachine
                 CallerInstructionIndex = context.Pc,
             }, context.ResultsBuffer.AsMemory(), context.CancellationToken);
             context.Awaiter = task.GetAwaiter();
+            
             if (context.Awaiter.IsCompleted)
             {
                 context.Thread.PopCallStackFrame();
