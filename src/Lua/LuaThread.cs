@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Lua.Internal;
 using Lua.Runtime;
@@ -42,8 +43,10 @@ public abstract class LuaThread
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrame()
     {
+       
         if (callStack.TryPop(out var frame))
         {
+            //Console.WriteLine("PopCallStackFrame" +new StackTrace());
             stack.PopUntil(frame.Base);
         }
         else
@@ -67,7 +70,21 @@ public abstract class LuaThread
         }
 
     }
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal void PopCallStackFrameFast()
+    {
+        if (callStack.TryPop())
+        {
+           
+        }
+        else
+        {
+            ThrowInvalidOperation();
+            static void ThrowInvalidOperation() => throw new InvalidOperationException("Empty stack");
+        }
 
+    }
+    
     internal void DumpStackValues()
     {
         var span = GetStackValues();

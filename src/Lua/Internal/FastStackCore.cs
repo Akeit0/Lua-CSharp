@@ -16,7 +16,7 @@ public struct FastStackCore<T>
     public readonly ReadOnlySpan<T> AsSpan()
     {
         if (array == null) return [];
-        return array.AsSpan(0, tail);
+        return array.AsSpan(0, tail)!;
     }
 
     public readonly Span<T?> GetBuffer()
@@ -60,6 +60,18 @@ public struct FastStackCore<T>
         tail--;
         value = array[tail]!;
         array[tail] = default;
+
+        return true;
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryPop()
+    {
+        if (tail == 0)
+        {
+            return false;
+        }
+        array[--tail] = default;
 
         return true;
     }

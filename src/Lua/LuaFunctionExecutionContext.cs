@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Lua.CodeAnalysis;
+using Lua.Runtime;
 
 namespace Lua;
 
@@ -14,6 +15,9 @@ public readonly record struct LuaFunctionExecutionContext
     public SourcePosition? SourcePosition { get; init; }
     public string? RootChunkName { get; init; }
     public string? ChunkName { get; init; }
+
+    public  int? CallerInstructionIndex { get; init; }
+    
     public object? AdditionalContext { get; init; }
 
     public ReadOnlySpan<LuaValue> Arguments
@@ -57,6 +61,23 @@ public readonly record struct LuaFunctionExecutionContext
 
         return argValue;
     }
+    
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal double GetArgumentDouble(int index)
+    {
+        if (ArgumentCount <= index)
+        {
+            ThrowArgumentNotExists(index);
+        }
+
+        var arg = Arguments[index];
+        if (!arg.TryReadDouble(out var argValue))
+        {
+            LuaRuntimeException.BadArgument(State.GetTraceback(), index + 1, Thread.GetCurrentFrame().Function.Name, "Number", arg.Type.ToString());
+        }
+
+        return argValue;
+    }
 
     void ThrowIfArgumentNotExists(int index)
     {
@@ -64,5 +85,11 @@ public readonly record struct LuaFunctionExecutionContext
         {
             LuaRuntimeException.BadArgument(State.GetTraceback(), index + 1, Thread.GetCurrentFrame().Function.Name);
         }
+    }
+    
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    void ThrowArgumentNotExists(int index)
+    {
+        LuaRuntimeException.BadArgument(State.GetTraceback(), index + 1, Thread.GetCurrentFrame().Function.Name);
     }
 }

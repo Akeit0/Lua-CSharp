@@ -92,7 +92,7 @@ public sealed class LuaState
         return new()
         {
             StackFrames = threadStack.AsSpan().ToArray()
-                .Append(MainThread)
+                .Prepend(MainThread)
                 .SelectMany(x => x.GetCallStackFrames()[1..].ToArray())
                 .ToArray()
         };

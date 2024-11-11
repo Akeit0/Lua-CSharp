@@ -26,7 +26,11 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     readonly double value;
     readonly object? referenceValue;
 
-    public LuaValueType Type => type;
+    public LuaValueType Type
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => type;
+    }
 
     public bool TryRead<T>(out T result)
     {
@@ -81,10 +85,8 @@ public readonly struct LuaValue : IEquatable<LuaValue>
                 }
                 else if (t == typeof(double))
                 {
-                    var str = (string)referenceValue!;
-                    var tryResult = TryParseToDouble(str, out var d);
-                    result = tryResult ? Unsafe.As<double, T>(ref d) : default!;
-                    return tryResult;
+                    result = default!;
+                    return TryParseToDouble(out Unsafe.As<T, double>(ref result));
                 }
                 else if (t == typeof(object))
                 {
@@ -164,6 +166,18 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         result = default!;
         return false;
     }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal bool TryReadBool(out bool result)
+    {
+        if (type == LuaValueType.Boolean)
+        {
+            result = value == 1;
+            return true;
+        }
+        result = default!;
+        return false;
+    }
     
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryReadNumber(out double result)
@@ -189,7 +203,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         result = default!;
         return false;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryReadFunction(out LuaFunction result)
     {
@@ -202,7 +216,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         result = default!;
         return false;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryReadString(out string result)
     {
@@ -216,32 +230,49 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         return false;
     }
 
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryReadDouble(out double result)
     {
-        switch (type)
+        if(type == LuaValueType.Number)
         {
-            case LuaValueType.Number:
-            {
-                var v = value;
-                result = v;
-                return true;
-            }
-                
-            case LuaValueType.String:
-                {
-                    var str = (string)referenceValue!;
-                    return TryParseToDouble(str, out result);
-                }
+            result = value;
+            return true;
         }
 
-        result = default!;
+        return TryParseToDouble( out result);
+    }
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal static bool TryReadOrSetDouble(ref LuaValue luaValue,out double result)
+    {
+        if (luaValue.type == LuaValueType.Number)
+        {
+            result = luaValue.value;
+            return true;
+        }
+        if (luaValue.TryParseToDouble(out result))
+        {
+            luaValue = result;
+            return true;
+        }
         return false;
     }
-    
-    static bool TryParseToDouble(string str, out double result)
+
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+    internal double UnsafeReadDouble()
     {
+        return value;
+    }
+
+    bool TryParseToDouble(out double result)
+    {
+        if (Type != LuaValueType.String)
+        {
+            result = default!;
+            return false;
+        }
+        var str = Unsafe.As<string>(referenceValue!);
         var span = str.AsSpan().Trim();
         if (span.Length == 0)
         {
@@ -279,10 +310,10 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         }
         else
         {
-            return double.TryParse(str, out  result);
+            return double.TryParse(str, out result);
         }
     }
-    
+
     public T Read<T>()
     {
         if (!TryRead<T>(out var result)) throw new InvalidOperationException($"Cannot convert LuaValueType.{Type} to {typeof(T).FullName}.");
@@ -321,90 +352,90 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool ToBoolean()
     {
-        if (Type is LuaValueType.Nil) return false;
-        if (TryRead<bool>(out var result)) return result;
+        if(type == LuaValueType.Boolean) return value!=0;
+        if (type is LuaValueType.Nil) return false;
         return true;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(bool value)
     {
         type = LuaValueType.Boolean;
         this.value = value ? 1 : 0;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(double value)
     {
         type = LuaValueType.Number;
         this.value = value;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(string value)
     {
         type = LuaValueType.String;
         referenceValue = value;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(LuaFunction value)
     {
         type = LuaValueType.Function;
         referenceValue = value;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(LuaTable value)
     {
         type = LuaValueType.Table;
         referenceValue = value;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(LuaThread value)
     {
         type = LuaValueType.Thread;
         referenceValue = value;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(ILuaUserData value)
     {
         type = LuaValueType.UserData;
         referenceValue = value;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator LuaValue(bool value)
     {
         return new(value);
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator LuaValue(double value)
     {
         return new(value);
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator LuaValue(string value)
     {
         return new(value);
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator LuaValue(LuaTable value)
     {
         return new(value);
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator LuaValue(LuaFunction value)
     {
         return new(value);
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static implicit operator LuaValue(LuaThread value)
     {
@@ -422,7 +453,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
             _ => referenceValue!.GetHashCode()
         };
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool Equals(LuaValue other)
     {
@@ -432,7 +463,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         {
             LuaValueType.Nil => true,
             LuaValueType.Boolean or LuaValueType.Number => other.value == value,
-            LuaValueType.String => Unsafe.As<string>(other.referenceValue)==Unsafe.As<string>(referenceValue),
+            LuaValueType.String => Unsafe.As<string>(other.referenceValue) == Unsafe.As<string>(referenceValue),
             _ => other.referenceValue!.Equals(referenceValue)
         };
     }
@@ -447,7 +478,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     {
         return a.Equals(b);
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public static bool operator !=(LuaValue a, LuaValue b)
     {
