@@ -852,9 +852,7 @@ public static partial class LuaVirtualMachine
                             }
 
                             postOperation = PostOperationType.TailCall;
-                            state = State.Await;
-                            Builder.AwaitOnCompleted(ref context.Awaiter, ref this);
-                            return;
+                            break;
                         case OpCode.Return:
                             context.State.CloseUpValues(context.Thread, frameBase);
                             if (context.Pop(instruction, frameBase)) goto Restart;
@@ -964,7 +962,7 @@ public static partial class LuaVirtualMachine
 
 
                 //Set the state to await and return with setting this method as the task's continuation
-                Console.WriteLine("Await On"+context.Instruction+GetTracebacks(ref context));
+                //Console.WriteLine("Await On"+context.Instruction+GetTracebacks(ref context));
                 state = State.Await;
                 Builder.AwaitOnCompleted(ref context.Awaiter, ref this);
                 return;
