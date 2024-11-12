@@ -31,17 +31,17 @@ public static partial class LuaVirtualMachine
         public readonly CancellationToken CancellationToken = cancellationToken;
         public int Pc = -1;
         public Instruction Instruction;
-        public bool Pushing => localCallStackCount > 0;
         public int ResultCount;
         public int TaskResult;
         public ValueTaskAwaiter<int> Awaiter;
-        int localCallStackCount = 0;
-        public bool IsTopLevel => localCallStackCount == 0;
+        public bool IsTopLevel => BaseCallStackCount == Thread.CallStack.Count;
+        
+        readonly int BaseCallStackCount = thread.CallStack.Count;
 
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public bool Pop(Instruction instruction, int frameBase)
         {
-            if (localCallStackCount < 1) return false;
+            if (BaseCallStackCount == Thread.CallStack.Count) return false;
             var count = instruction.B - 1;
             if(count==-1)count = Stack.Count - (instruction.A + frameBase);
             return PopWithCount(count, instruction.A + frameBase);
@@ -50,26 +50,23 @@ public static partial class LuaVirtualMachine
         [MethodImpl(MethodImplOptions.NoInlining)]
         bool PopWithCount(int count, int src)
         {
-            var frames = Thread.GetCallStackFrames();
+           ref var callStack = ref Thread.CallStack;
             Re:
-            if (localCallStackCount < 1) return false;
-           
-            localCallStackCount--;
+            var frames = callStack.AsSpan();
+            if (frames.Length==BaseCallStackCount) return false;
             ref readonly var frame = ref frames[^1];
             Pc = frame.CallerInstructionIndex!.Value;
             ref readonly var lastFrame = ref frames[^2];
             Closure = Unsafe.As<Closure>(lastFrame.Function);
-            
+            FrameBase = lastFrame.Base;
+            VariableArgumentCount = lastFrame.VariableArgumentCount;
             var callInstruction = Chunk.Instructions[Pc];
             if (callInstruction.OpCode == OpCode.TailCall)
             {
-                count = Stack.Count - src;
+               
                 Thread.PopCallStackFrameFast();
-                frames=frames[..^1];
                 goto Re;
             }
-            FrameBase = lastFrame.Base;
-            VariableArgumentCount = lastFrame.VariableArgumentCount;
             var opCode = callInstruction.OpCode;
             if(opCode is OpCode.Eq or OpCode.Le or OpCode.Lt)
             {
@@ -82,11 +79,29 @@ public static partial class LuaVirtualMachine
                 return true;
             }
             var target = callInstruction.A + FrameBase;
-            if(opCode==OpCode.TForCall)target+=3;
+            var targetCount = count;
+            if(opCode==OpCode.TForCall)
+            {
+                target += 3;
+                targetCount = callInstruction.C;
+            }
+            else if(opCode==OpCode.Call)
+            {
+                var c = callInstruction.C;
+                if(c!=0)
+                {
+                    targetCount = c - 1;
+                }
+            }
             if (count > 0)
             {
                 var stackBuffer = Stack.GetBuffer();
                 stackBuffer.Slice(src, count).CopyTo(stackBuffer.Slice(target, count));
+                if(targetCount>count)
+                {
+                    stackBuffer.Slice(target + count, targetCount - count).Clear();
+                }
+                Stack.NotifyTop(target + targetCount);
             }
 
             if (opCode == OpCode.Self)
@@ -101,24 +116,23 @@ public static partial class LuaVirtualMachine
         [MethodImpl(MethodImplOptions.NoInlining)]
         public bool PopFromBuffer(Span<LuaValue> result)
         {
-            var frames = Thread.GetCallStackFrames();
+            var frames = Thread.CallStack.AsSpan();
             Re:
-            if (localCallStackCount < 1) return false;
-            if (--localCallStackCount < 1) return false;
+            if(frames.Length==BaseCallStackCount)return false;
             ref readonly var frame = ref frames[^1];
             Pc = frame.CallerInstructionIndex!.Value;
             ref readonly var lastFrame = ref frames[^2];
             Closure = Unsafe.As<Closure>(lastFrame.Function);
             var callInstruction = Chunk.Instructions[Pc];
+            FrameBase = lastFrame.Base;
+            VariableArgumentCount = lastFrame.VariableArgumentCount;
             if (callInstruction.OpCode == OpCode.TailCall)
             {
                 Thread.PopCallStackFrameFast();
-                frames=frames[..^1];
                 goto Re;
             }
 
-            FrameBase = lastFrame.Base;
-            VariableArgumentCount = lastFrame.VariableArgumentCount;
+           
             var opCode = callInstruction.OpCode;
             if(opCode is OpCode.Eq or OpCode.Le or OpCode.Lt)
             {
@@ -127,14 +141,17 @@ public static partial class LuaVirtualMachine
                 {
                     Pc++;
                 }
-                localCallStackCount--;
                 Thread.PopCallStackFrameFast(frame.Base);
                 return true;
             }
             var target = callInstruction.A + FrameBase;
-            if(opCode==OpCode.TForCall)target+=3;
-            
             var count = result.Length; 
+            if(opCode==OpCode.TForCall)
+            {
+                target += 3;
+                count = callInstruction.C;
+            }
+            
             if (count > 0)
             {
                 var stackBuffer = Stack.GetBuffer();
@@ -142,8 +159,6 @@ public static partial class LuaVirtualMachine
                 result.CopyTo(stackBuffer.Slice(target, count));
                 Stack.NotifyTop(target + count);
             }
-
-            localCallStackCount--;
             if (opCode == OpCode.Self)
             {
                 Thread.PopCallStackFrameFast(target + 2);
@@ -156,10 +171,23 @@ public static partial class LuaVirtualMachine
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         public void Push(in CallStackFrame frame)
         {
-            localCallStackCount++; Pc = -1;
+            Pc = -1;
             Closure = (frame.Function as Closure)!;
             FrameBase = frame.Base;
             VariableArgumentCount = frame.VariableArgumentCount;
+        }
+        
+        public void PopOnTopCallStackFrames()
+        {
+            ref var callStack = ref Thread.CallStack;
+            var count = callStack.Count;
+            if(count==BaseCallStackCount)return;
+            while (callStack.Count > BaseCallStackCount+1)
+            {
+                Thread.PopCallStackFrameFast();
+            }
+            Thread.PopCallStackFrame();
+            
         }
     }
 
@@ -981,10 +1009,12 @@ public static partial class LuaVirtualMachine
             }
             catch (Exception e)
             {
+                //Console.WriteLine(e);
                 if (e is not LuaRuntimeException)
                 {
                     Console.WriteLine(GetTracebacks(ref context));
                 }
+                context.PopOnTopCallStackFrames();
                 //if (context.Pushing) context.Thread.PopCallStackFrame();
                 context.State.CloseUpValues(context.Thread, context.FrameBase);
                 ReturnResultsBuffer(context.ResultsBuffer);
@@ -1105,47 +1135,6 @@ public static partial class LuaVirtualMachine
         }
 
         doRestart = false;
-        // if (func is FastFunction fastFunction)
-        // {
-        //     return FastCall(ref context, fastFunction, newBase, argumentCount);
-        // }
-// #if NET6_0_OR_GREATER
-//         [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
-// #endif
-//         static bool FastCall(ref VirtualMachineExecutionContext context, FastFunction fastFunction, int newBase, int argumentCount)
-//         {
-//             {
-//                 var buffer = context.Stack.GetBuffer();
-//                 var ra = context.Instruction.A + context.FrameBase;
-//                 var fastContext = new FastFunctionContext()
-//                 {
-//                     State = context.State,
-//                     Arguments = buffer.Slice(newBase, argumentCount),
-//                     ResultBuffer = buffer.Slice(ra),
-//                 };
-//                 var rawResultCount = fastFunction.InvokeFast(fastContext);
-//                 var resultCount = rawResultCount;
-//                 context.Thread.PopCallStackFrameFast(newBase);
-//                 //context.Pushing = false;
-//                 var ic = context.Instruction.C;
-//                 if (ic != 0)
-//                 {
-//                     resultCount = ic - 1;
-//                 }
-//             
-//                 if (resultCount == 0)
-//                 {
-//                     context.Stack.Pop();
-//                 }
-//             
-//                 if (resultCount != rawResultCount)
-//                 {
-//                     buffer.Slice(ra + resultCount, rawResultCount - resultCount).Clear();
-//                 }
-//             
-//                 return true;
-//             }
-//         }
 
 #if NET6_0_OR_GREATER
         [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
@@ -1282,10 +1271,8 @@ public static partial class LuaVirtualMachine
             VariableArgumentCount = variableArgumentCount,
             Function = func,
             CallerInstructionIndex = context.Pc,
-            //CallerChunk = context.Chunk,
         };
         thread.PushCallStackFrame(newFrame);
-       // context.Pushing = true;
 
         context.Push(newFrame);
         if (func is Closure)
@@ -1348,12 +1335,11 @@ public static partial class LuaVirtualMachine
         {
             LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", iteratorRaw);
         }
-        //Console.WriteLine("TForCall  " + iterator.Name);
+        
         var nextBase = RA + 3 + instruction.C;
         stack.Get(nextBase) = stack.Get(RA + 1);
         stack.Get(nextBase + 1) = stack.Get(RA + 2);
         stack.NotifyTop(nextBase + 2);
-        //context.Pushing = true;
         var newCallFrame = new CallStackFrame()
         {
             Base = nextBase,
@@ -1662,7 +1648,6 @@ public static partial class LuaVirtualMachine
                 return true;
             }
             
-            //context.Pushing = true;
             var task = indexTable.Func(new()
             {
                 State = state,
@@ -1724,7 +1709,7 @@ public static partial class LuaVirtualMachine
             }
             
             
-            //  context.Pushing = true;
+            
             var task = func.Func(new()
             {
                 State = context.State,
@@ -1790,7 +1775,7 @@ public static partial class LuaVirtualMachine
             }
             
             
-            //  context.Pushing = true;
+            
             var task = func.Func(new()
             {
                 State = context.State,
