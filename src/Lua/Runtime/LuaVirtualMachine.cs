@@ -8,7 +8,7 @@ namespace Lua.Runtime;
 
 public static partial class LuaVirtualMachine
 {
-    [StructLayout(LayoutKind.Auto, Pack = 4)]
+    [StructLayout(LayoutKind.Auto)]
     [method: MethodImpl(MethodImplOptions.AggressiveInlining)]
     struct VirtualMachineExecutionContext(
         LuaState state,
@@ -70,8 +70,8 @@ public static partial class LuaVirtualMachine
             }
             FrameBase = lastFrame.Base;
             VariableArgumentCount = lastFrame.VariableArgumentCount;
-            
-            if(callInstruction.OpCode is OpCode.Eq or OpCode.Le or OpCode.Lt)
+            var opCode = callInstruction.OpCode;
+            if(opCode is OpCode.Eq or OpCode.Le or OpCode.Lt)
             {
                 var compareResult = count != 0 && Stack.Get(src).ToBoolean();
                 if (compareResult != (callInstruction.A == 1))
@@ -82,14 +82,14 @@ public static partial class LuaVirtualMachine
                 return true;
             }
             var target = callInstruction.A + FrameBase;
-
+            if(opCode==OpCode.TForCall)target+=3;
             if (count > 0)
             {
                 var stackBuffer = Stack.GetBuffer();
                 stackBuffer.Slice(src, count).CopyTo(stackBuffer.Slice(target, count));
             }
 
-            if (callInstruction.OpCode == OpCode.Self)
+            if (opCode == OpCode.Self)
             {
                 Thread.PopCallStackFrameFast(target + 2);
                 return true;
@@ -119,8 +119,8 @@ public static partial class LuaVirtualMachine
 
             FrameBase = lastFrame.Base;
             VariableArgumentCount = lastFrame.VariableArgumentCount;
-            
-            if(callInstruction.OpCode is OpCode.Eq or OpCode.Le or OpCode.Lt)
+            var opCode = callInstruction.OpCode;
+            if(opCode is OpCode.Eq or OpCode.Le or OpCode.Lt)
             {
                 var compareResult = result.Length >0 && result[0].ToBoolean();
                 if (compareResult != (callInstruction.A == 1))
@@ -132,6 +132,8 @@ public static partial class LuaVirtualMachine
                 return true;
             }
             var target = callInstruction.A + FrameBase;
+            if(opCode==OpCode.TForCall)target+=3;
+            
             var count = result.Length; 
             if (count > 0)
             {
@@ -142,7 +144,7 @@ public static partial class LuaVirtualMachine
             }
 
             localCallStackCount--;
-            if (callInstruction.OpCode == OpCode.Self)
+            if (opCode == OpCode.Self)
             {
                 Thread.PopCallStackFrameFast(target + 2);
                 return true;
@@ -310,7 +312,7 @@ public static partial class LuaVirtualMachine
                         context.Stack.NotifyTop(RA + 1);
                         break;
                     case PostOperationType.TForCall:
-                        TForCall(ref context);
+                        TForCallPostOperation(ref context);
                         break;
                     case PostOperationType.Call:
                         CallPostOperation(ref context);
@@ -915,7 +917,11 @@ public static partial class LuaVirtualMachine
                             context.Pc += instruction.SBx;
                             continue;
                         case OpCode.TForCall:
-                            if (TForCall(ref context)) continue;
+                            if (TForCall(ref context, out doRestart))
+                            {
+                                if (doRestart) goto Restart;
+                                continue;
+                            }
                             postOperation = PostOperationType.TForCall;
                             break;
                         case OpCode.TForLoop:
@@ -927,7 +933,6 @@ public static partial class LuaVirtualMachine
                             }
 
                             continue;
-
                         case OpCode.SetList:
                             SetList(ref context);
                             continue;
@@ -1331,8 +1336,9 @@ public static partial class LuaVirtualMachine
         return true;
     }
 
-    static bool TForCall(ref VirtualMachineExecutionContext context)
+    static bool TForCall(ref VirtualMachineExecutionContext context,out bool doRestart)
     {
+        doRestart = false;
         var instruction = context.Instruction;
         var stack = context.Stack;
         var RA = instruction.A + context.FrameBase;
@@ -1342,21 +1348,39 @@ public static partial class LuaVirtualMachine
         {
             LuaRuntimeException.AttemptInvalidOperation(GetTracebacks(ref context), "call", iteratorRaw);
         }
-
+        //Console.WriteLine("TForCall  " + iterator.Name);
         var nextBase = RA + 3 + instruction.C;
         stack.Get(nextBase) = stack.Get(RA + 1);
         stack.Get(nextBase + 1) = stack.Get(RA + 2);
         stack.NotifyTop(nextBase + 2);
         //context.Pushing = true;
-        var task = iterator.InvokeAsyncPushOnly(new()
+        var newCallFrame = new CallStackFrame()
+        {
+            Base = nextBase,
+            CallPosition = context.Chunk.SourcePositions[context.Pc],
+            ChunkName = context.Chunk.Name,
+            RootChunkName = context.Chunk.GetRoot().Name,
+            Function = iterator,
+            CallerInstructionIndex = context.Pc,
+            VariableArgumentCount = 0
+        };
+        context.Thread.PushCallStackFrame(newCallFrame);
+        if(iterator.IsClosure)
+        {
+            context.Push(newCallFrame);
+            doRestart = true;
+            return true;
+        }
+        
+        var task = iterator.Func(new()
         {
             State = context.State,
             Thread = context.Thread,
             ArgumentCount = 2,
             FrameBase = nextBase,
-            SourcePosition = context.Chunk.SourcePositions[context.Pc],
-            ChunkName = context.Chunk.Name,
-            RootChunkName = context.Chunk.GetRoot().Name,
+            SourcePosition = newCallFrame.CallPosition,
+            ChunkName = newCallFrame.ChunkName,
+            RootChunkName = newCallFrame.RootChunkName,
             CallerInstructionIndex = context.Pc,
         }, context.ResultsBuffer.AsMemory(), context.CancellationToken);
 
