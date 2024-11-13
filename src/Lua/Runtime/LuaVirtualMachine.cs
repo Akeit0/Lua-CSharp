@@ -48,6 +48,7 @@ public static partial class LuaVirtualMachine
             if (count == -1) count = Stack.Count - (instruction.A + frameBase);
             return PopFromBuffer(Stack.GetBuffer().Slice(instruction.A + frameBase, count));
         }
+
         [MethodImpl(MethodImplOptions.NoInlining)]
         public bool PopFromBuffer(Span<LuaValue> result)
         {
@@ -97,6 +98,7 @@ public static partial class LuaVirtualMachine
                     targetCount = c - 1;
                 }
             }
+
             if (count > 0)
             {
                 var stackBuffer = Stack.GetBuffer();
@@ -106,6 +108,7 @@ public static partial class LuaVirtualMachine
                 {
                     stackBuffer.Slice(target + count, targetCount - count).Clear();
                 }
+
                 Stack.NotifyTop(target + count);
             }
 
@@ -304,6 +307,7 @@ public static partial class LuaVirtualMachine
                                 Builder.SetResult(context.TaskResult);
                                 return;
                             }
+
                             break;
                         case PostOperationType.Self:
                             SelfPostOperation(ref context);
@@ -1074,10 +1078,10 @@ public static partial class LuaVirtualMachine
 
 
         var thread = context.Thread;
-        var (newBase, argumentCount, variableArgumentCount) = PrepareForFunctionCallNoTail(thread, func, instruction, RA);
+        var (newBase, argumentCount, variableArgumentCount) = PrepareForFunctionCall(thread, func, instruction, RA);
 
         var newFrame = func.CreateNewFrame(ref context, newBase, variableArgumentCount);
-        
+
         thread.PushCallStackFrame(newFrame);
         if (func.IsClosure)
         {
@@ -1095,7 +1099,7 @@ public static partial class LuaVirtualMachine
         {
             {
                 var task = func.Invoke(ref context, newFrame, argumentCount);
-                
+
                 var awaiter = task.GetAwaiter();
                 if (!awaiter.IsCompleted)
                 {
@@ -1139,8 +1143,6 @@ public static partial class LuaVirtualMachine
                 return true;
             }
         }
-
-       
     }
 
     static void CallPostOperation(ref VirtualMachineExecutionContext context)
@@ -1198,7 +1200,6 @@ public static partial class LuaVirtualMachine
         }
 
         var (newBase, argumentCount, variableArgumentCount) = PrepareForFunctionTailCall(thread, func, instruction, RA);
-        //var rootChunk = context.Chunk.GetRoot();
 
         var newFrame = func.CreateNewFrame(ref context, newBase, variableArgumentCount);
         thread.PushCallStackFrame(newFrame);
@@ -1217,13 +1218,12 @@ public static partial class LuaVirtualMachine
         var awaiter = task.GetAwaiter();
         if (!awaiter.IsCompleted)
         {
-           // Console.WriteLine("Await On " + context.Instruction + "  " + context.Thread.CallStack.Count);
             context.Awaiter = awaiter;
             return false;
         }
 
         context.Thread.PopCallStackFrame();
-        
+
         doRestart = true;
         var resultCount = awaiter.GetResult();
         var resultsSpan = context.ResultsBuffer.AsSpan(0, resultCount);
@@ -1233,7 +1233,7 @@ public static partial class LuaVirtualMachine
             context.ResultCount = resultCount;
             resultsSpan.CopyTo(context.Buffer.Span);
         }
-        
+
         return true;
     }
 
@@ -1359,7 +1359,7 @@ public static partial class LuaVirtualMachine
             stack.Push(key);
 
 
-            var newFrame = indexTable.CreateNewFrame(ref context, stack.Count-2);
+            var newFrame = indexTable.CreateNewFrame(ref context, stack.Count - 2);
 
             context.Thread.PushCallStackFrame(newFrame);
 
@@ -1433,7 +1433,7 @@ public static partial class LuaVirtualMachine
             stack.Push(table);
             stack.Push(key);
             stack.Push(value);
-             var newFrame = indexTable.CreateNewFrame(ref context, stack.Count-3);
+            var newFrame = indexTable.CreateNewFrame(ref context, stack.Count - 3);
 
             context.Thread.PushCallStackFrame(newFrame);
 
@@ -1476,7 +1476,7 @@ public static partial class LuaVirtualMachine
             stack.Push(vb);
             stack.Push(vc);
 
-            var newFrame = func.CreateNewFrame(ref context, stack.Count-2);
+            var newFrame = func.CreateNewFrame(ref context, stack.Count - 2);
 
             context.Thread.PushCallStackFrame(newFrame);
 
@@ -1521,7 +1521,7 @@ public static partial class LuaVirtualMachine
             }
 
             stack.Push(vb);
-            var newFrame = func.CreateNewFrame(ref context, stack.Count-1);
+            var newFrame = func.CreateNewFrame(ref context, stack.Count - 1);
 
             context.Thread.PushCallStackFrame(newFrame);
 
@@ -1576,7 +1576,7 @@ public static partial class LuaVirtualMachine
             var stack = context.Stack;
             stack.Push(vb);
             stack.Push(vc);
-            var newFrame =func.CreateNewFrame(ref context, stack.Count-2);
+            var newFrame = func.CreateNewFrame(ref context, stack.Count - 2);
 
             context.Thread.PushCallStackFrame(newFrame);
 
@@ -1620,9 +1620,25 @@ public static partial class LuaVirtualMachine
         return true;
     }
 
+    // If there are variable arguments, the base of the stack is moved by that number and the values of the variable arguments are placed in front of it.
+    // see: https://wubingzheng.github.io/build-lua-in-rust/en/ch08-02.arguments.html
+    static (int FrameBase, int ArgumentCount, int VariableArgumentCount) PrepareVariableArgument(LuaStack stack, int newBase, int argumentCount,
+        int variableArgumentCount)
+    {
+        var temp = newBase;
+        newBase += variableArgumentCount;
+
+        stack.EnsureCapacity(newBase + argumentCount);
+        stack.NotifyTop(newBase + argumentCount);
+
+        var stackBuffer = stack.GetBuffer()[temp..];
+        stackBuffer[..argumentCount].CopyTo(stackBuffer[variableArgumentCount..]);
+        stackBuffer.Slice(argumentCount, variableArgumentCount).CopyTo(stackBuffer);
+        return (newBase, argumentCount, variableArgumentCount);
+    }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static (int FrameBase, int ArgumentCount, int VariableArgumentCount) PrepareForFunctionCallNoTail(LuaThread thread, LuaFunction function,
+    static (int FrameBase, int ArgumentCount, int VariableArgumentCount) PrepareForFunctionCall(LuaThread thread, LuaFunction function,
         Instruction instruction, int RA)
     {
         var argumentCount = instruction.B - 1;
@@ -1639,24 +1655,7 @@ public static partial class LuaVirtualMachine
             return (newBase, argumentCount, 0);
         }
 
-        return WithVariableArgument(newBase, variableArgumentCount, thread.Stack, argumentCount);
-
-        // If there are variable arguments, the base of the stack is moved by that number and the values of the variable arguments are placed in front of it.
-        // see: https://wubingzheng.github.io/build-lua-in-rust/en/ch08-02.arguments.html
-        static (int FrameBase, int ArgumentCount, int VariableArgumentCount) WithVariableArgument(int newBase, int variableArgumentCount,
-            LuaStack stack, int argumentCount)
-        {
-            var temp = newBase;
-            newBase += variableArgumentCount;
-
-            stack.EnsureCapacity(newBase + argumentCount);
-            stack.NotifyTop(newBase + argumentCount);
-
-            var stackBuffer = stack.GetBuffer()[temp..];
-            stackBuffer[..argumentCount].CopyTo(stackBuffer[variableArgumentCount..]);
-            stackBuffer.Slice(argumentCount, variableArgumentCount).CopyTo(stackBuffer);
-            return (newBase, argumentCount, variableArgumentCount);
-        }
+        return PrepareVariableArgument(thread.Stack, newBase, argumentCount, variableArgumentCount);
     }
 
     static (int FrameBase, int ArgumentCount, int VariableArgumentCount) PrepareForFunctionTailCall(LuaThread thread, LuaFunction function,
@@ -1684,22 +1683,12 @@ public static partial class LuaVirtualMachine
 
         var variableArgumentCount = function.GetVariableArgumentCount(argumentCount);
 
-        // If there are variable arguments, the base of the stack is moved by that number and the values of the variable arguments are placed in front of it.
-        // see: https://wubingzheng.github.io/build-lua-in-rust/en/ch08-02.arguments.html
-        if (variableArgumentCount > 0)
+        if (variableArgumentCount <= 0)
         {
-            var temp = newBase;
-            newBase += variableArgumentCount;
-
-            stack.EnsureCapacity(newBase + argumentCount);
-            stack.NotifyTop(newBase + argumentCount);
-
-            var stackBuffer = stack.GetBuffer()[temp..];
-            stackBuffer[..argumentCount].CopyTo(stackBuffer[variableArgumentCount..]);
-            stackBuffer.Slice(argumentCount, variableArgumentCount).CopyTo(stackBuffer);
+            return (newBase, argumentCount, 0);
         }
 
-        return (newBase, argumentCount, variableArgumentCount);
+        return PrepareVariableArgument(thread.Stack, newBase, argumentCount, variableArgumentCount);
     }
 
     static Traceback GetTracebacks(ref VirtualMachineExecutionContext context)
@@ -1720,11 +1709,11 @@ public static partial class LuaVirtualMachine
         state.CurrentThread.PopCallStackFrame();
         return tracebacks;
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    static CallStackFrame CreateNewFrame(this LuaFunction function, ref VirtualMachineExecutionContext context, int newBase, int variableArgumentCount=0)
+    static CallStackFrame CreateNewFrame(this LuaFunction function, ref VirtualMachineExecutionContext context, int newBase, int variableArgumentCount = 0)
     {
-        return new ()
+        return new()
         {
             Base = newBase,
             CallPosition = context.Chunk.SourcePositions[context.Pc],
@@ -1734,7 +1723,6 @@ public static partial class LuaVirtualMachine
             VariableArgumentCount = variableArgumentCount,
             CallerInstructionIndex = context.Pc,
         };
-        
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -1752,5 +1740,4 @@ public static partial class LuaVirtualMachine
             CallerInstructionIndex = frame.CallerInstructionIndex,
         }, context.ResultsBuffer, context.CancellationToken);
     }
-
 }
