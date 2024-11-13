@@ -202,52 +202,7 @@ public static partial class LuaVirtualMachine
         stateMachine.Builder.Start(ref stateMachine);
         return stateMachine.Builder.Task;
     }
-
-
-    // //Asynchronous method implementation. 
-    // internal async static ValueTask<int> ExecuteClosureAsync(LuaState state, CallStackFrame frame, Memory<LuaValue> buffer, CancellationToken cancellationToken)
-    // {
-    //     var thread = state.CurrentThread;
-    //     var closure = (Closure)frame.Function;
-    //     var chunk = closure.Proto;
-    //     var resultBuffer = ArrayPool<LuaValue>.Shared.Rent(1024);
-    //
-    //     var context = new VirtualMachineExecutionContext(state, thread.Stack, resultBuffer, buffer, thread, chunk, frame, cancellationToken);
-    //     try
-    //     {
-    //         var instructions = chunk.Instructions;
-    //
-    //         while (context.ResultCount == null)
-    //         {
-    //             var instruction = instructions[++context.Pc];
-    //             context.Instruction = instruction;
-    //             var operation = operations[(int)instruction.OpCode];
-    //             var action = operation(ref context);
-    //             if (action != null)
-    //             {
-    //                 context.TaskResult = await context.Task;
-    //                 {
-    //                     context.Thread.PopCallStackFrame();
-    //                     context.Pushing = false;
-    //                 }
-    //                 action(ref context);
-    //             }
-    //         }
-    //
-    //         return context.ResultCount.Value;
-    //     }
-    //     catch (Exception)
-    //     {
-    //         if (context.Pushing) context.Thread.PopCallStackFrame();
-    //         context.State.CloseUpValues(context.Thread, context.FrameBase);
-    //         throw;
-    //     }
-    //     finally
-    //     {
-    //         ArrayPool<LuaValue>.Shared.Return(context.ResultsBuffer);
-    //     }
-    // }
-
+ 
     /// <summary>
     /// Manual implementation of the async state machine
     /// </summary>
@@ -269,7 +224,7 @@ public static partial class LuaVirtualMachine
         public AsyncValueTaskMethodBuilder<int> Builder;
         State state;
         PostOperationType postOperation;
-        
+
         public void MoveNext()
         {
             //If the state is end, the function is done, so set the result and return. I think this state is not reachable in this implementation
@@ -282,6 +237,7 @@ public static partial class LuaVirtualMachine
             ref var context = ref Context;
             try
             {
+                //If the state is State.Await, it means the task is awaited, so get the result and continue
                 if (state == State.Await)
                 {
                     context.TaskResult = context.Awaiter.GetResult();
@@ -326,6 +282,7 @@ public static partial class LuaVirtualMachine
                     state = State.Running;
                 }
 
+                //This is a label to restart the execution when new function is called or restarted
                 Restart:
 
                 var instructions = context.Chunk.Instructions;
