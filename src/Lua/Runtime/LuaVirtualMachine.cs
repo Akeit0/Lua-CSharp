@@ -45,8 +45,9 @@ public static partial class LuaVirtualMachine
         {
             if (BaseCallStackCount == Thread.CallStack.Count) return false;
             var count = instruction.B - 1;
-            if (count == -1) count = Stack.Count - (instruction.A + frameBase);
-            return PopFromBuffer(Stack.GetBuffer().Slice(instruction.A + frameBase, count));
+            var src = instruction.A + frameBase;
+            if (count == -1) count = Stack.Count - src;
+            return PopFromBuffer(Stack.GetBuffer().Slice(src, count));
         }
 
         [MethodImpl(MethodImplOptions.NoInlining)]
@@ -98,27 +99,35 @@ public static partial class LuaVirtualMachine
                     targetCount = c - 1;
                 }
             }
-
-            if (count > 0)
+            else if (opCode == OpCode.Self)
             {
-                var stackBuffer = Stack.GetBuffer();
-                Stack.EnsureCapacity(target + count);
-                result.CopyTo(stackBuffer.Slice(target, count));
-                if (targetCount > count)
-                {
-                    stackBuffer.Slice(target + count, targetCount - count).Clear();
-                }
-
-                Stack.NotifyTop(target + count);
-            }
-
-            if (opCode == OpCode.Self)
-            {
+                Stack.Get(target) = count == 0 ? LuaValue.Nil : result[0];
                 Thread.PopCallStackFrameFast(target + 2);
                 return true;
             }
+            else if (opCode is OpCode.SetTable or OpCode.SetTabUp)
+            {
+                targetCount = 0;
+            }
+            else
+            {
+                targetCount = 1;
+            }
 
-            Thread.PopCallStackFrameFast(target + count);
+            Stack.EnsureCapacity(target + targetCount);
+            if (count > 0)
+            {
+                var stackBuffer = Stack.GetBuffer();
+                result.CopyTo(stackBuffer.Slice(target, count));
+            }
+
+            if (targetCount > count)
+            {
+                Stack.GetBuffer().Slice(target + count, targetCount - count).Clear();
+            }
+
+            Stack.NotifyTop(target + targetCount);
+            Thread.PopCallStackFrameFast(target + targetCount);
             return true;
         }
 
