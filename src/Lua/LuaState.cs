@@ -88,6 +88,14 @@ public sealed class LuaState
 
     public Traceback GetTraceback()
     {
+        
+        if(threadStack.Count==0)
+        {
+            return new()
+            {
+                StackFrames = MainThread.GetCallStackFrames()[1..].ToArray()
+            };
+        }
         // TODO: optimize
         return new()
         {
