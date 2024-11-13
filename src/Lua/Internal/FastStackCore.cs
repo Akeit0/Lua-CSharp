@@ -33,15 +33,14 @@ public struct FastStackCore<T>
         }
     }
 
+    [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public void Push(in T item)
     {
         array ??= new T[InitialCapacity];
 
         if (tail == array.Length)
         {
-            var newArray = new T[tail * 2];
-            Array.Copy(array, newArray, tail);
-            array = newArray;
+            Array.Resize(ref array, tail * 2);
         }
 
         array[tail] = item;
