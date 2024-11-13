@@ -24,7 +24,7 @@ public class LuaFunction(string name, Func<LuaFunctionExecutionContext, Memory<L
             RootChunkName = context.RootChunkName ?? LuaState.DefaultChunkName,
             VariableArgumentCount = this is Closure closure ? Math.Max(context.ArgumentCount - closure.Proto.ParameterCount, 0) : 0,
             Function = this,
-            //CallerInstructionIndex = context.CallerInstructionIndex,
+            CallerInstructionIndex = context.CallerInstructionIndex,
         };
 
         context.Thread.PushCallStackFrame(frame);
@@ -36,24 +36,5 @@ public class LuaFunction(string name, Func<LuaFunctionExecutionContext, Memory<L
         {
             context.Thread.PopCallStackFrame();
         }
-    }
-    
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal  ValueTask<int> InvokeAsyncPushOnly(in LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
-    {
-        var frame = new CallStackFrame
-        {
-            Base = context.FrameBase,
-            CallPosition = context.SourcePosition,
-            ChunkName = context.ChunkName ?? LuaState.DefaultChunkName,
-            RootChunkName = context.RootChunkName ?? LuaState.DefaultChunkName,
-            VariableArgumentCount = this is Closure closure ? Math.Max(context.ArgumentCount - closure.Proto.ParameterCount, 0) : 0,
-            Function = this,
-            //CallerInstructionIndex = context.CallerInstructionIndex,
-            //CallerChunk = context.CallerChunk,
-        };
-
-        context.Thread.PushCallStackFrame(in frame);
-        return  Func(context, buffer, cancellationToken);
     }
 }
