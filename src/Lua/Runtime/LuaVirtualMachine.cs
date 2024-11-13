@@ -189,7 +189,6 @@ public static partial class LuaVirtualMachine
     internal static ValueTask<int> ExecuteClosureAsync(LuaState luaState, Memory<LuaValue> buffer,
         CancellationToken cancellationToken)
     {
-        //Console.WriteLine("[ExecuteClosureAsync]");
         var thread = luaState.CurrentThread;
         ref readonly var frame = ref thread.GetCallStackFrames()[^1];
         var resultBuffer = GetResultsBuffer();
@@ -270,10 +269,7 @@ public static partial class LuaVirtualMachine
         public AsyncValueTaskMethodBuilder<int> Builder;
         State state;
         PostOperationType postOperation;
-
-#if NET6_0_OR_GREATER
-        [MethodImpl(MethodImplOptions.AggressiveOptimization)]
-#endif
+        
         public void MoveNext()
         {
             //If the state is end, the function is done, so set the result and return. I think this state is not reachable in this implementation
@@ -530,7 +526,6 @@ public static partial class LuaVirtualMachine
                             {
                                 Unsafe.Add(ref stackHead, iA) = numB + numC;
                                 stack.NotifyTop(ra1);
-                                //Console.WriteLine($"Add {numB} + {numC} = {Unsafe.Add(ref stackHead, iA)}");
                                 continue;
                             }
 
@@ -969,7 +964,6 @@ public static partial class LuaVirtualMachine
 
 
                 //Set the state to await and return with setting this method as the task's continuation
-                //Console.WriteLine("Await On"+context.Instruction+GetTracebacks(ref context));
                 state = State.Await;
                 Builder.AwaitOnCompleted(ref context.Awaiter, ref this);
                 return;
@@ -982,7 +976,6 @@ public static partial class LuaVirtualMachine
             }
             catch (Exception e)
             {
-                //Console.WriteLine(e);
                 if (e is not LuaRuntimeException)
                 {
                     Console.WriteLine(GetTracebacks(ref context));
@@ -1065,9 +1058,7 @@ public static partial class LuaVirtualMachine
 
         return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Concat, "concat", out doRestart);
     }
-#if NET6_0_OR_GREATER
-    [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
-#endif
+
     static bool Call(ref VirtualMachineExecutionContext context, out bool doRestart)
     {
         var instruction = context.Instruction;
@@ -1101,9 +1092,7 @@ public static partial class LuaVirtualMachine
 
         doRestart = false;
         return FuncCall(ref context, in newFrame, func, newBase, argumentCount);
-#if NET6_0_OR_GREATER
-        [MethodImpl(MethodImplOptions.AggressiveOptimization | MethodImplOptions.NoInlining)]
-#endif
+
         static bool FuncCall(ref VirtualMachineExecutionContext context, in CallStackFrame newFrame, LuaFunction func, int newBase, int argumentCount)
         {
             {
