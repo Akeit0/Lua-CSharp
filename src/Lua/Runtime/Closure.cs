@@ -1,7 +1,5 @@
-using System;
 using System.Runtime.CompilerServices;
 using Lua.Internal;
-using static Lua.CodeAnalysis.Syntax.DisplayStringSyntaxVisitor;
 
 namespace Lua.Runtime;
 
@@ -19,44 +17,46 @@ public sealed class Closure : LuaFunction
         for (int i = 0; i < proto.UpValues.Length; i++)
         {
             var description = proto.UpValues[i];
-            var upValue = GetUpValueFromDescription(state, environment == null ? state.EnvUpValue : UpValue.Closed(environment), proto, description, 1);
+            var upValue = GetUpValueFromDescription(state, state.CurrentThread,environment == null ? state.EnvUpValue : UpValue.Closed(environment), description);
             upValues.Add(upValue);
         }
         IsClosure = true;
     }
-
+    
     public Chunk Proto => proto;
     public ReadOnlySpan<UpValue> UpValues => upValues.AsSpan();
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal LuaValue GetUpValue(int index)
     {
         return upValues[index].GetValue();
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void SetUpValue(int index,LuaValue value)
+    internal void SetUpValue(int index, LuaValue value)
     {
         upValues[index].SetValue(value);
     }
 
-
-    static UpValue GetUpValueFromDescription(LuaState state, UpValue envUpValue, Chunk proto, UpValueInfo description, int depth)
+    static UpValue GetUpValueFromDescription(LuaState state, LuaThread thread,UpValue envUpValue,  UpValueInfo description)
     {
+        
         if (description.IsInRegister)
         {
-            var thread = state.CurrentThread;
-            var callStack = thread.GetCallStackFrames();
-            var frame = callStack[^depth];
-            return state.GetOrAddUpValue(thread, frame.Base + description.Index);
+            return state.GetOrAddUpValue(thread, thread.GetCallStackFrames()[^1].Base+ description.Index);
+            
         }
-        else if (description.Index == -1) // -1 is global environment
+        if (description.Index == -1) // -1 is global environment
         {
             return envUpValue;
         }
-        else
         {
-            return GetUpValueFromDescription(state, envUpValue, proto.Parent!, proto.Parent!.UpValues[description.Index], depth + 1);
+            if (thread.GetCallStackFrames()[^1].Function is Closure parentClosure)
+            {
+                 return parentClosure.UpValues[description.Index];
+            }
+
+            throw new Exception();
         }
     }
 }

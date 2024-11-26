@@ -150,7 +150,7 @@ namespace Lua.Internal
             goto Return;
         }
 
-        private int Initialize(int capacity)
+        private void Initialize(int capacity)
         {
             var newSize = 8;
             while (newSize < capacity)
@@ -166,8 +166,6 @@ namespace Lua.Internal
             _freeList = -1;
             _buckets = buckets;
             _entries = entries;
-
-            return size;
         }
 
         private void Insert(LuaValue key, LuaValue value)

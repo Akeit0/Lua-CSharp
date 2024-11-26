@@ -1,4 +1,3 @@
-using System.Diagnostics;
 using System.Runtime.CompilerServices;
 using Lua.Internal;
 using Lua.Runtime;
@@ -32,59 +31,49 @@ public abstract class LuaThread
     {
         return callStack.AsSpan();
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PushCallStackFrame(in CallStackFrame frame)
     {
         callStack.Push(frame);
     }
-    
+
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrame()
     {
-       
         if (callStack.TryPop(out var frame))
         {
-            //Console.WriteLine("PopCallStackFrame" +new StackTrace());
             stack.PopUntil(frame.Base);
         }
         else
         {
-            ThrowInvalidOperation();
-            static void ThrowInvalidOperation() => throw new InvalidOperationException("Empty stack");
+            ThrowForEmptyStack();
         }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void PopCallStackFrameFast(int franeBase)
+    internal void PopCallStackFrameUnsafe(int frameBase)
     {
         if (callStack.TryPop())
         {
-            stack.PopUntil(franeBase);
+            stack.PopUntil(frameBase);
         }
         else
         {
-            ThrowInvalidOperation();
-            static void ThrowInvalidOperation() => throw new InvalidOperationException("Empty stack");
+            ThrowForEmptyStack();
         }
-
     }
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal void PopCallStackFrameFast()
+    internal void PopCallStackFrameUnsafe()
     {
-        if (callStack.TryPop())
+        if (!callStack.TryPop())
         {
-           
+            ThrowForEmptyStack();
         }
-        else
-        {
-            ThrowInvalidOperation();
-            static void ThrowInvalidOperation() => throw new InvalidOperationException("Empty stack");
-        }
-
     }
-    
+
     internal void DumpStackValues()
     {
         var span = GetStackValues();
@@ -93,4 +82,6 @@ public abstract class LuaThread
             Console.WriteLine($"LuaStack [{i}]\t{span[i]}");
         }
     }
+    
+    static void ThrowForEmptyStack() => throw new InvalidOperationException("Empty stack");
 }

@@ -40,4 +40,7 @@ public partial class LVec3
     {
         return value.ToString();
     }
+
+
+   
 }

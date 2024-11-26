@@ -64,6 +64,8 @@ public class FunctionCompilationContext : IDisposable
     // loop
     FastListCore<BreakDescription> breakQueue;
     FastListCore<GotoDescription> gotoQueue;
+    
+    public byte MaxStackPosition { get; set; }
 
     /// <summary>
     /// Chunk name (for debug)
@@ -403,16 +405,22 @@ public class FunctionCompilationContext : IDisposable
         // add return
         instructions.Add(Instruction.Return(0, 1));
         instructionPositions.Add(instructionPositions.Length == 0 ? default : instructionPositions[^1]);
-
+       OptimizeInstructions();
+       var name = ChunkName ?? "chunk";
+       if (name.Length == 0)
+       {
+           name =instructionPositions.Length == 0 ? "chunk" : instructionPositions[0].ToString();
+       }
         var chunk = new Chunk()
         {
-            Name = ChunkName ?? "chunk",
+            Name = name,
             Instructions = instructions.AsSpan().ToArray(),
             SourcePositions = instructionPositions.AsSpan().ToArray(),
             Constants = constants.AsSpan().ToArray(),
             UpValues = upvalues.AsSpan().ToArray(),
             Functions = functions.AsSpan().ToArray(),
             ParameterCount = ParameterCount,
+            MaxStackSize = MaxStackPosition
         };
 
         foreach (var function in functions.AsSpan())
@@ -421,6 +429,37 @@ public class FunctionCompilationContext : IDisposable
         }
 
         return chunk;
+    }
+     void OptimizeInstructions()
+    {
+        // var span = instructions.AsSpan();
+        // for (var index = 1; index < span.Length; index++)
+        // {
+        //     ref var instruction =ref  span[index];
+        //     switch (instruction.OpCode)
+        //     {
+        //         case OpCode.Add:
+        //         {
+        //             ref var previous = ref span[index - 1];
+        //             if(previous.OpCode==OpCode.Mul && instruction.A == instruction.B && previous.A == instruction.C)
+        //             {
+        //                 previous =  new Instruction(){OpCode = OpCode.Fma, A = instruction.A, B = previous.B, C = previous.C};
+        //             }
+        //
+        //             break;
+        //         }
+        //         case OpCode.Sub:
+        //         {
+        //             ref var previous = ref span[index - 1];
+        //             if(previous.OpCode==OpCode.Mul && instruction.A == instruction.B && previous.A == instruction.C)
+        //             {
+        //                 previous =  new Instruction(){OpCode = OpCode.Fms, A = instruction.A, B = previous.B, C = previous.C};
+        //             }
+        //
+        //             break;
+        //         }
+        //     }
+        //}
     }
 
     /// <summary>
@@ -442,6 +481,7 @@ public class FunctionCompilationContext : IDisposable
         LoopLevel = 0;
         ParameterCount = 0;
         HasVariableArguments = false;
+        MaxStackPosition = 0;
     }
 
     /// <summary>

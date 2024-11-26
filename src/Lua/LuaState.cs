@@ -70,10 +70,13 @@ public sealed class LuaState
                 Thread = CurrentThread,
                 ArgumentCount = 0,
                 FrameBase = 0,
-                SourcePosition = null,
-                RootChunkName = chunk.Name,
-                ChunkName = chunk.Name,
+               // CallerObject = closure
             }, buffer, cancellationToken);
+        }
+        catch (LuaRuntimeException e)
+        {
+            Console.WriteLine(e.LuaTraceback);
+            throw;
         }
         finally
         {
@@ -88,21 +91,33 @@ public sealed class LuaState
 
     public Traceback GetTraceback()
     {
-        
         if(threadStack.Count==0)
         {
             return new()
             {
-                StackFrames = MainThread.GetCallStackFrames()[1..].ToArray()
+                RootFunc = (Closure)MainThread.GetCallStackFrames()[0].Function,
+                StackFrames = MainThread.GetCallStackFrames()[1..]
+                    .ToArray()
             };
         }
-        // TODO: optimize
+
+        using var list = new PooledList<CallStackFrame>(8);
+        foreach (var frame in MainThread.GetCallStackFrames()[1..])
+        {
+            list.Add(frame);
+        }
+        foreach (var thread in threadStack.AsSpan())
+        {
+            if(thread.CallStack.Count==0) continue;
+            foreach (var frame in thread.GetCallStackFrames()[1..])
+            {
+                list.Add(frame);
+            }
+        }
         return new()
         {
-            StackFrames = threadStack.AsSpan().ToArray()
-                .Prepend(MainThread)
-                .SelectMany(x => x.GetCallStackFrames()[1..].ToArray())
-                .ToArray()
+            RootFunc = (Closure)MainThread.GetCallStackFrames()[0].Function,
+            StackFrames = list.AsSpan().ToArray()
         };
     }
 
@@ -163,12 +178,16 @@ public sealed class LuaState
         {
             if (upValue.RegisterIndex == registerIndex && upValue.Thread == thread)
             {
+                
+               // Console.WriteLine($"Get UpValue  {upValue.GetValue()} {registerIndex}");
                 return upValue;
             }
         }
+       
 
         var newUpValue = UpValue.Open(thread, registerIndex);
         openUpValues.Add(newUpValue);
+      // Console.WriteLine("Open " +newUpValue.IsClosed+" "+newUpValue.GetValue() + "  "+registerIndex); 
         return newUpValue;
     }
 

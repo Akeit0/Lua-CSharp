@@ -77,7 +77,7 @@ public struct FastStackCore<T>
 
     public T Pop()
     {
-        if (!TryPop(out var result)) throw new InvalidOperationException("Empty stack");
+        if (!TryPop(out var result)) ThrowForEmptyStack();
         return result;
     }
 
@@ -96,7 +96,7 @@ public struct FastStackCore<T>
 
     public T Peek()
     {
-        if (!TryPeek(out var result)) throw new InvalidOperationException();
+        if (!TryPeek(out var result)) ThrowForEmptyStack();
         return result;
     }
 
@@ -129,5 +129,10 @@ public struct FastStackCore<T>
     {
         array.AsSpan(0, tail).Clear();
         tail = 0;
+    }
+    
+    void ThrowForEmptyStack()
+    {
+        throw new InvalidOperationException("Empty stack");
     }
 }

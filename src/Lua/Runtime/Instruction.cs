@@ -119,6 +119,8 @@ public struct Instruction : IEquatable<Instruction>
             OpCode.Div => $"DIV       {A} {B} {C}",
             OpCode.Mod => $"MOD       {A} {B} {C}",
             OpCode.Pow => $"POW       {A} {B} {C}",
+            //OpCode.Fma => $"FMA       {A} {B} {C}",
+            //OpCode.Fms => $"FMS       {A} {B} {C}",
             OpCode.Unm => $"UNM       {A} {B}",
             OpCode.Not => $"NOT       {A} {B}",
             OpCode.Len => $"LEN       {A} {B}",

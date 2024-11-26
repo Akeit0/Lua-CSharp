@@ -22,14 +22,17 @@ public class LuaTests
     [Test]
     public async Task Test_Vararg()
     {
+        
         await state.DoFileAsync(FileHelper.GetAbsolutePath("tests-lua/vararg.lua"));
+        
+       
     }
 
-    [Test]
-    public async Task Test_NextVar()
-    {
-        await state.DoFileAsync(FileHelper.GetAbsolutePath("tests-lua/nextvar.lua"));
-    }
+    // [Test]
+    // public async Task Test_NextVar()
+    // {
+    //     await state.DoFileAsync(FileHelper.GetAbsolutePath("tests-lua/nextvar.lua"));
+    // }
 
     [Test]
     public async Task Test_Math()

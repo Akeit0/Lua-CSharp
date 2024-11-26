@@ -1,5 +1,6 @@
 using System.Reflection;
 using BenchmarkDotNet.Attributes;
+using BenchmarkDotNet.Jobs;
 using Lua;
 using Lua.Standard;
 using MoonSharp.Interpreter;
@@ -38,31 +39,33 @@ public class AddBenchmark
         core = default!;
         GC.Collect();
     }
-
-    [Benchmark(Description = "MoonSharp (RunString)")]
-    public DynValue Benchmark_MoonSharp_String()
-    {
-        return core.MoonSharpState.DoString(core.SourceText);
-    }
-
-    [Benchmark(Description = "MoonSharp (RunFile)")]
-    public DynValue Benchmark_MoonSharp_File()
-    {
-        return core.MoonSharpState.DoFile(core.FilePath);
-    }
-
-    [Benchmark(Description = "NLua (DoString)")]
+    
+    [Benchmark(Description = "NLua (DoString)",Baseline = true)]
     public object[] Benchmark_NLua_String()
     {
         return core.NLuaState.DoString(core.SourceText);
     }
 
-    [Benchmark(Description = "NLua (DoFile)")]
-    public object[] Benchmark_NLua_File()
-    {
-        return core.NLuaState.DoFile(core.FilePath);
-    }
 
+    // [Benchmark(Description = "MoonSharp (RunString)")]
+    // public DynValue Benchmark_MoonSharp_String()
+    // {
+    //     return core.MoonSharpState.DoString(core.SourceText);
+    // }
+    //
+    // [Benchmark(Description = "MoonSharp (RunFile)")]
+    // public DynValue Benchmark_MoonSharp_File()
+    // {
+    //     return core.MoonSharpState.DoFile(core.FilePath);
+    // }
+
+   
+    // [Benchmark(Description = "NLua (DoFile)")]
+    // public object[] Benchmark_NLua_File()
+    // {
+    //     return core.NLuaState.DoFile(core.FilePath);
+    // }
+    
     [Benchmark(Description = "Lua-CSharp (DoString)")]
     public async Task<LuaValue> Benchmark_LuaCSharp_String()
     {
@@ -70,10 +73,10 @@ public class AddBenchmark
         return buffer[0];
     }
 
-    [Benchmark(Description = "Lua-CSharp (DoFileAsync)")]
-    public async Task<LuaValue> Benchmark_LuaCSharp_File()
-    {
-        await core.LuaCSharpState.DoFileAsync(core.FilePath, buffer);
-        return buffer[0];
-    }
+    // [Benchmark(Description = "Lua-CSharp (DoFileAsync)")]
+    // public async Task<LuaValue> Benchmark_LuaCSharp_File()
+    // {
+    //     await core.LuaCSharpState.DoFileAsync(core.FilePath, buffer);
+    //     return buffer[0];
+    // }
 }

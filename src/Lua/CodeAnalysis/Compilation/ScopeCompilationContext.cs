@@ -34,7 +34,6 @@ public class ScopeCompilationContext : IDisposable
     readonly Dictionary<ReadOnlyMemory<char>, LabelDescription> labels = new(32, Utf16StringMemoryComparer.Default);
 
     byte lastLocalVariableIndex;
-    
     public byte StackStartPosition { get; private set; }
     public byte StackPosition { get; set; }
 
@@ -79,6 +78,8 @@ public class ScopeCompilationContext : IDisposable
         {
             StackPosition++;
         }
+        Function.MaxStackPosition = Math.Max(Function.MaxStackPosition, StackPosition);
+       
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

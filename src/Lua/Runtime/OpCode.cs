@@ -11,7 +11,6 @@ public enum OpCode : byte
     GetUpVal,   // A B     R(A) := UpValue[B]
     GetTabUp,   // A B C   R(A) := UpValue[B][RK(C)]
     GetTable,   // A B C   R(A) := R(B)[RK(C)]
-
     SetTabUp,   // A B C   UpValue[A][RK(B)] := RK(C)
     SetUpVal,   // A B     UpValue[B] := R(A)
     SetTable,   // A B C   R(A)[RK(B)] := RK(C)
@@ -26,6 +25,8 @@ public enum OpCode : byte
     Div,        // A B C   R(A) := RK(B) / RK(C)
     Mod,        // A B C   R(A) := RK(B) % RK(C)
     Pow,        // A B C   R(A) := RK(B) ^ RK(C)
+    //Fma,        // A B C   R(A) := R(A) + RK(B) * RK(C)
+    //Fms,        // A B C   R(A) := R(A) - RK(B) * RK(C)
     Unm,        // A B     R(A) := -R(B)
     Not,        // A B     R(A) := not R(B)
     Len,        // A B     R(A) := length of R(B)

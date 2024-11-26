@@ -97,4 +97,9 @@ public class LuaAssertionException(Traceback traceback, string message) : LuaRun
     }
 }
 
+public class LuaRuntimeLuaValueException(Traceback traceback, LuaValue value) : LuaRuntimeException(traceback, value.ToString())
+{
+   public LuaValue Value { get; } = value;
+}
+
 public class LuaModuleNotFoundException(string moduleName) : LuaException($"module '{moduleName}' not found");

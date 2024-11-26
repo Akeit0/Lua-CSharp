@@ -1,3 +1,4 @@
+using System.Globalization;
 using Lua.CodeAnalysis.Compilation;
 using Lua.Internal;
 using Lua.Runtime;
@@ -101,11 +102,11 @@ public sealed class BasicLibrary
 
     public ValueTask<int> Error(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
     {
-        var obj = context.ArgumentCount == 0 || context.Arguments[0].Type is LuaValueType.Nil
+        var value = context.ArgumentCount == 0 || context.Arguments[0].Type is LuaValueType.Nil
             ? "(error object is a nil value)"
-            : context.Arguments[0].ToString();
+            : context.Arguments[0];
 
-        throw new LuaRuntimeException(context.State.GetTraceback(), obj!);
+        throw new LuaRuntimeLuaValueException(context.State.GetTraceback(), value);
     }
 
     public ValueTask<int> GetMetatable(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
@@ -284,7 +285,15 @@ public sealed class BasicLibrary
         catch (Exception ex)
         {
             buffer.Span[0] = false;
-            buffer.Span[1] = ex.Message;
+            if(ex is LuaRuntimeLuaValueException luaEx)
+            {
+                buffer.Span[1] = luaEx.Value;
+            }
+            else
+            {
+                buffer.Span[1] = ex.Message;
+            }
+
             return 2;
         }
     }
@@ -445,7 +454,7 @@ public sealed class BasicLibrary
             }
             else if (toBase == 10)
             {
-                if (double.TryParse(str, out var result))
+                if (double.TryParse(str, NumberStyles.Float, CultureInfo.InvariantCulture, out var result))
                 {
                     value = result;
                 }
@@ -604,19 +613,21 @@ public sealed class BasicLibrary
         catch (Exception ex)
         {
             methodBuffer.AsSpan().Clear();
-
-            context.State.Push(ex.Message);
+            var error = (ex is LuaRuntimeLuaValueException luaEx) ? luaEx.Value : ex.Message;
+            
+            context.State.Push(error);
 
             // invoke error handler
             await arg1.InvokeAsync(context with
             {
                 State = context.State,
                 ArgumentCount = 1,
-                FrameBase = context.Thread.Stack.Count - context.ArgumentCount,
+                FrameBase = context.Thread.Stack.Count - 1,
             }, methodBuffer.AsMemory(), cancellationToken);
 
             buffer.Span[0] = false;
-            buffer.Span[1] = ex.Message;
+            buffer.Span[1] = methodBuffer[0];
+            
 
             return 2;
         }

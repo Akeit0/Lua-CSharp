@@ -1,7 +1,6 @@
-local x = 0
-
-for _ = 0, 25000 do
-    x = add(x, 1)
+local x = 1
+for _ = 0, 250000 do
+    x = x + 1
 end
 
 return x

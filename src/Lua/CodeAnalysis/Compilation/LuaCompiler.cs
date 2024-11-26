@@ -255,23 +255,26 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
                         // For the last element, we need to take into account variable arguments and multiple return values.
                         if (listItem == lastField)
                         {
+                            bool isFixedItems = true;
                             switch (listItem.Expression)
                             {
                                 case CallFunctionExpressionNode call:
                                     CompileCallFunctionExpression(call, context, false, -1);
+                                    isFixedItems = false;
                                     break;
                                 case CallTableMethodExpressionNode method:
                                     CompileTableMethod(method, context, false, -1);
                                     break;
                                 case VariableArgumentsExpressionNode varArg:
                                     CompileVariableArgumentsExpression(varArg, context, -1);
+                                    isFixedItems = false;
                                     break;
                                 default:
                                     listItem.Expression.Accept(this, context);
                                     break;
                             }
 
-                            context.PushInstruction(Instruction.SetList(tableRegisterIndex, 0, arrayBlock), listItem.Position);
+                            context.PushInstruction(Instruction.SetList(tableRegisterIndex, (ushort)(isFixedItems ? context.StackTopPosition - tableRegisterIndex: 0), arrayBlock), listItem.Position);
                             currentArrayChunkSize = 0;
                         }
                         else
@@ -736,12 +739,13 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
     {
         using var endJumpIndexList = new PooledList<int>(8);
         var hasElse = node.ElseNodes.Length > 0;
-
         // if
         using (var scopeContext = context.CreateChildScope())
         {
+           // 
             CompileConditionNode(node.IfNode.ConditionNode, scopeContext, true);
-
+           
+           // Console.WriteLine($"m top: {top}");
             var ifPosition = scopeContext.Function.Instructions.Length;
             scopeContext.PushInstruction(Instruction.Jmp(0, 0), node.Position);
 
@@ -762,6 +766,9 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
             }
 
             scopeContext.Function.Instructions[ifPosition].SBx = scopeContext.Function.Instructions.Length - 1 - ifPosition;
+           // Console.WriteLine($"current top: {scopeContext.StackPosition}");
+            //scopeContext.StackPosition++;
+            
         }
 
         // elseif
@@ -770,7 +777,7 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
             using var scopeContext = context.CreateChildScope();
 
             CompileConditionNode(elseIf.ConditionNode, scopeContext, true);
-
+            
             var elseifPosition = scopeContext.Function.Instructions.Length;
             scopeContext.PushInstruction(Instruction.Jmp(0, 0), node.Position);
 
@@ -810,7 +817,7 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
         {
             context.Function.Instructions[index].SBx = context.Function.Instructions.Length - 1 - index;
         }
-
+        //context.StackPosition = top;
         return true;
     }
 
@@ -821,14 +828,14 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
         context.Function.LoopLevel++;
 
         using var scopeContext = context.CreateChildScope();
-
+        var stackPosition = scopeContext.StackPosition;
         foreach (var childNode in node.Nodes)
         {
             childNode.Accept(this, scopeContext);
         }
 
         CompileConditionNode(node.ConditionNode, scopeContext, true);
-        var a = scopeContext.HasCapturedLocalVariables ? scopeContext.StackPosition : (byte)0;
+        var a = scopeContext.HasCapturedLocalVariables ? (byte)(stackPosition + 1) : (byte)0;
         scopeContext.PushInstruction(Instruction.Jmp(a, startIndex - scopeContext.Function.Instructions.Length - 1), node.Position);
         scopeContext.TryPushCloseUpValue(scopeContext.StackPosition, node.Position);
 
@@ -848,6 +855,7 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
         context.Function.LoopLevel++;
 
         using var scopeContext = context.CreateChildScope();
+        var stackPosition = scopeContext.StackPosition;
 
         foreach (var childNode in node.Nodes)
         {
@@ -860,7 +868,7 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
         scopeContext.Function.Instructions[conditionIndex].SBx = scopeContext.Function.Instructions.Length - 1 - conditionIndex;
 
         CompileConditionNode(node.ConditionNode, scopeContext, false);
-        var a = scopeContext.HasCapturedLocalVariables ? scopeContext.StackPosition : (byte)0;
+        var a = scopeContext.HasCapturedLocalVariables ? (byte)(1+stackPosition) : (byte)0;
         scopeContext.PushInstruction(Instruction.Jmp(a, conditionIndex - context.Function.Instructions.Length), node.Position);
         scopeContext.TryPushCloseUpValue(scopeContext.StackPosition, node.Position);
 

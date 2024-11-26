@@ -75,6 +75,7 @@ internal ref struct PooledList<T>
     {
         return new ReadOnlySpan<T>(buffer, 0, tail);
     }
+    
 
     void ThrowIfDisposed()
     {

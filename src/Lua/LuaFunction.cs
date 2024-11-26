@@ -6,9 +6,13 @@ namespace Lua;
 public class LuaFunction(string name, Func<LuaFunctionExecutionContext, Memory<LuaValue>, CancellationToken, ValueTask<int>> func)
 {
     public string Name { get; } = name;
-    
-    internal bool IsClosure = false;
     internal Func<LuaFunctionExecutionContext, Memory<LuaValue>, CancellationToken, ValueTask<int>> Func { get; } = func;
+
+    internal bool IsClosure
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get; private protected init;
+    } = false;
 
     public LuaFunction(Func<LuaFunctionExecutionContext, Memory<LuaValue>, CancellationToken, ValueTask<int>> func) : this("anonymous", func)
     {
@@ -19,12 +23,9 @@ public class LuaFunction(string name, Func<LuaFunctionExecutionContext, Memory<L
         var frame = new CallStackFrame
         {
             Base = context.FrameBase,
-            CallPosition = context.SourcePosition,
-            ChunkName = context.ChunkName ?? LuaState.DefaultChunkName,
-            RootChunkName = context.RootChunkName ?? LuaState.DefaultChunkName,
+            //CallerObject = context.CallerObject,
             VariableArgumentCount = this is Closure closure ? Math.Max(context.ArgumentCount - closure.Proto.ParameterCount, 0) : 0,
             Function = this,
-            CallerInstructionIndex = context.CallerInstructionIndex,
         };
 
         context.Thread.PushCallStackFrame(frame);
