@@ -63,11 +63,6 @@ public sealed class LuaCoroutine : LuaThread, IValueTaskSource<LuaCoroutine.Yiel
                         Stack.EnsureCapacity(baseThread.Stack.Count);
                         baseThread.Stack.AsSpan().CopyTo(Stack.GetBuffer());
                         Stack.NotifyTop(baseThread.Stack.Count);
-
-                       // copy callstack value
-                        // CallStack.EnsureCapacity(baseThread.CallStack.Count);
-                        // baseThread.CallStack.AsSpan().CopyTo(CallStack.GetBuffer());
-                        // CallStack.NotifyTop(baseThread.CallStack.Count);
                     }
                     else
                     {
@@ -154,11 +149,7 @@ public sealed class LuaCoroutine : LuaThread, IValueTaskSource<LuaCoroutine.Yiel
                         State = context.State,
                         Thread = this,
                         ArgumentCount = context.ArgumentCount - 1,
-                        FrameBase = frameBase,
-                        //CallerChunk = context.CallerChunk,
-                        //CallerInstructionIndex = context.CallerInstructionIndex,
-                        //ChunkName = Function.Name,
-                        //RootChunkName = context.RootChunkName,
+                        FrameBase = frameBase
                     }, this.buffer, cancellationToken).Preserve();
 
                     Volatile.Write(ref isFirstCall, false);
@@ -181,8 +172,10 @@ public sealed class LuaCoroutine : LuaThread, IValueTaskSource<LuaCoroutine.Yiel
                 else
                 {
                     var resultCount = functionTask!.Result;
-
+                   
                     Volatile.Write(ref status, (byte)LuaThreadStatus.Dead);
+                    
+                    
                     buffer.Span[0] = true;
                     this.buffer[0..resultCount].CopyTo(buffer.Span[1..]);
 

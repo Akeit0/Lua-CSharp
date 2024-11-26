@@ -58,7 +58,7 @@ public static partial class LuaVirtualMachine
             var frames = callStack.AsSpan();
             if (frames.Length == BaseCallStackCount) return false;
             ref readonly var frame = ref frames[^1];
-            Pc = frame.CallerInstructionIndex!.Value;
+            Pc = frame.CallerInstructionIndex;
             ref readonly var lastFrame = ref frames[^2];
             Closure = Unsafe.As<Closure>(lastFrame.Function);
             var callInstruction = Chunk.Instructions[Pc];
@@ -252,10 +252,7 @@ public static partial class LuaVirtualMachine
                 Builder.SetResult(Context.ResultCount);
                 return;
             }
-            if (20 < Context.Stack.Count)
-            {
-                throw new LuaRuntimeException(Context.State.GetTraceback(),"stack overflow");
-            }
+           
             ref var context = ref Context;
             try
             {

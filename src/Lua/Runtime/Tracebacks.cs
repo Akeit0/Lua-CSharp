@@ -19,10 +19,10 @@ public class Traceback
             {
                 LuaFunction lastFunc = index > 0 ? stackFrames[index - 1].Function : RootFunc;
                 var frame = stackFrames[index];
-                if (frame.CallerInstructionIndex != null && lastFunc is Closure closure)
+                if (lastFunc is Closure closure)
                 {
                     var p = closure.Proto;
-                    return p.SourcePositions[frame.CallerInstructionIndex.Value];
+                    return p.SourcePositions[frame.CallerInstructionIndex];
                 }
             }
             return default;
@@ -45,14 +45,14 @@ public class Traceback
                 builder.AppendFormatted(lastFunc.Name);
                 builder.AppendLiteral("'\n");
             }
-            else if (frame.CallerInstructionIndex!=null &&lastFunc is Closure closure)
+            else if (lastFunc is Closure closure)
             {
                 var p = closure.Proto;
                 var root = p.GetRoot();
                 builder.AppendLiteral("\t");
                 builder.AppendFormatted(root.Name);
                 builder.AppendLiteral(":");
-                builder.AppendFormatted(p.SourcePositions[frame.CallerInstructionIndex.Value].Line);
+                builder.AppendFormatted(p.SourcePositions[frame.CallerInstructionIndex].Line);
                 builder.AppendLiteral(root == p ? ": in '" : ": in function '");
                 builder.AppendFormatted(p.Name);
                 builder.AppendLiteral("'\n");

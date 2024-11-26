@@ -9,7 +9,7 @@ public record struct CallStackFrame
     public required int Base;
     public required LuaFunction Function;
     public required int VariableArgumentCount;
-    public int? CallerInstructionIndex;
+    public int CallerInstructionIndex;
     public CallStatus Status;
 }
 
