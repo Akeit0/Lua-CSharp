@@ -1012,7 +1012,7 @@ public static partial class LuaVirtualMachine
             {
                 if (e is not LuaRuntimeException)
                 {
-                    Console.WriteLine(e.Message+" "+GetTracebacks(ref context));
+                    e = new LuaRuntimeCSharpException(GetTracebacks(ref context), e);
                 }
                 context.PopOnTopCallStackFrames();
                 context.State.CloseUpValues(context.Thread, context.FrameBase);
