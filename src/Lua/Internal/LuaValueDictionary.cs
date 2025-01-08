@@ -51,7 +51,7 @@ namespace Lua.Internal
                     return value;
                 }
 
-                return default;
+                return LuaValue.Nil;
             }
             [MethodImpl(MethodImplOptions.AggressiveInlining)]
             set => Insert(key, value);
@@ -85,7 +85,7 @@ namespace Lua.Internal
 
             for (int i = 0; i < _count; i++)
             {
-                if (entries![i].next >= -1 && entries[i].value.Equals(value))
+                if (entries![i].next >= -1 && entries[i].value.EqualsNotNull(value))
                 {
                     return true;
                 }
@@ -122,7 +122,7 @@ namespace Lua.Internal
                         }
 
                         entry = ref entries[i];
-                        if (entry.hashCode == hashCode && entry.key.Equals(key))
+                        if (entry.hashCode == hashCode && entry.key.EqualsNotNull(key))
                         {
                             index = i;
                             goto ReturnFound;
@@ -172,7 +172,7 @@ namespace Lua.Internal
 
         private void Insert(LuaValue key, LuaValue value)
         {
-            if (value.Type is LuaValueType.Nil)
+            if (value.IsNil)
             {
                 _nilCount++;
             }
@@ -201,7 +201,7 @@ namespace Lua.Internal
                     entry = ref entries[i];
                     if (entry.hashCode == hashCode && entry.key.Equals(key))
                     {
-                        if (entry.value.Type is LuaValueType.Nil)
+                        if (entry.value.IsNil)
                         {
                             _nilCount--;
                         }
@@ -308,7 +308,7 @@ namespace Lua.Internal
                 {
                     ref Entry entry = ref entries[i];
 
-                    if (entry.hashCode == hashCode && entry.key.Equals(key))
+                    if (entry.hashCode == hashCode && entry.key.EqualsNotNull(key))
                     {
                         if (last < 0)
                         {
@@ -322,7 +322,7 @@ namespace Lua.Internal
                         Debug.Assert((StartOfFreeList - _freeList) < 0, "shouldn't underflow because max hashtable length is MaxPrimeArrayLength = 0x7FEFFFFD(2146435069) _freelist underflow threshold 2147483646");
                         entry.next = StartOfFreeList - _freeList;
 
-                        if (entry.value.Type is LuaValueType.Nil)
+                        if (entry.value.IsNil)
                         {
                             _nilCount--;
                         }
@@ -375,7 +375,7 @@ namespace Lua.Internal
                 while (++index  < _count)
                 {
                     ref Entry entry = ref entries[index];
-                    if (entry is { next: >= -1, value.Type: not LuaValueType.Nil })
+                    if (entry is { next: >= -1, value.IsNotNil: true })
                     {
                         pair = new(entry.key, entry.value);
                         return true;

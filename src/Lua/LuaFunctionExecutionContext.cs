@@ -28,7 +28,7 @@ public readonly record struct LuaFunctionExecutionContext
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool HasArgument(int index)
     {
-        return ArgumentCount > index && Arguments[index].Type is not LuaValueType.Nil;
+        return ArgumentCount > index && Arguments[index].IsNotNil;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

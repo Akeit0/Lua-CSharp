@@ -24,7 +24,7 @@ public sealed class LuaTable
         [MethodImpl(MethodImplOptions.AggressiveInlining)]
         get
         {
-            if (key.Type is LuaValueType.Nil) ThrowIndexIsNil();
+            if (key.IsNil) ThrowIndexIsNil();
 
             if (TryGetInteger(key, out var index))
             {
@@ -76,7 +76,7 @@ public sealed class LuaTable
         {
             for (int i = 0; i < array.Length; i++)
             {
-                if (array[i].Type is LuaValueType.Nil) return i;
+                if (array[i].IsNil) return i;
             }
 
             return array.Length;
@@ -92,7 +92,7 @@ public sealed class LuaTable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool TryGetValue(LuaValue key, out LuaValue value)
     {
-        if (key.Type is LuaValueType.Nil)
+        if (key.IsNil)
         {
             value = default;
             return false;
@@ -103,16 +103,16 @@ public sealed class LuaTable
             if (index > 0 && index <= array.Length)
             {
                 value = array[index - 1];
-                return value.Type is not LuaValueType.Nil;
+                return value.IsNotNil;
             }
         }
 
-        return dictionary.TryGetValue(key, out value) && value.Type is not LuaValueType.Nil;
+        return dictionary.TryGetValue(key, out value) && value.IsNotNil;
     }
 
     public bool ContainsKey(LuaValue key)
     {
-        if (key.Type is LuaValueType.Nil)
+        if (key.IsNil)
         {
             return false;
         }
@@ -123,7 +123,7 @@ public sealed class LuaTable
                    array[index - 1].Type != LuaValueType.Nil;
         }
 
-        return dictionary.TryGetValue(key, out var value) && value.Type is not LuaValueType.Nil;
+        return dictionary.TryGetValue(key, out var value) && value.IsNotNil;
     }
 
     public LuaValue RemoveAt(int index)
@@ -136,7 +136,7 @@ public sealed class LuaTable
             array.AsSpan(arrayIndex + 1).CopyTo(array.AsSpan(arrayIndex));
         }
 
-        array[^1] = default;
+        array[^1] = LuaValue.Nil;
 
         return value;
     }
@@ -162,7 +162,7 @@ public sealed class LuaTable
     public bool TryGetNext(LuaValue key, out KeyValuePair<LuaValue, LuaValue> pair)
     {
         var index = -1;
-        if (key.Type is LuaValueType.Nil)
+        if (key.IsNil)
         {
             index = 0;
         }
@@ -176,7 +176,7 @@ public sealed class LuaTable
             var span = array.AsSpan(index);
             for (int i = 0; i < span.Length; i++)
             {
-                if (span[i].Type is not LuaValueType.Nil)
+                if (span[i].IsNotNil)
                 {
                     pair = new(index + i + 1, span[i]);
                     return true;
@@ -185,7 +185,7 @@ public sealed class LuaTable
 
             foreach (var kv in dictionary)
             {
-                if (kv.Value.Type is not LuaValueType.Nil)
+                if (kv.Value.IsNotNil)
                 {
                     pair = kv;
                     return true;

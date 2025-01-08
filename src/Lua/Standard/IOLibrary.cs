@@ -68,7 +68,7 @@ public sealed class IOLibrary
     {
         var io = context.State.Environment["io"].Read<LuaTable>();
 
-        if (context.ArgumentCount == 0 || context.Arguments[0].Type is LuaValueType.Nil)
+        if (context.ArgumentCount == 0 || context.Arguments[0].IsNil)
         {
             buffer.Span[0] = io["stdio"];
             return new(1);
@@ -99,7 +99,7 @@ public sealed class IOLibrary
             buffer.Span[0] = new LuaFunction("iterator", (context, buffer, ct) =>
             {
                 var resultCount = IOHelper.Read(context.State, file, "lines", 0, [], buffer, true);
-                if (resultCount > 0 && buffer.Span[0].Type is LuaValueType.Nil)
+                if (resultCount > 0 && buffer.Span[0].IsNil)
                 {
                     file.Close();
                 }
@@ -120,7 +120,7 @@ public sealed class IOLibrary
             buffer.Span[0] = new LuaFunction("iterator", (context, buffer, ct) =>
             {
                 var resultCount = IOHelper.Read(context.State, file, "lines", 0, formats, buffer, true);
-                if (resultCount > 0 && buffer.Span[0].Type is LuaValueType.Nil)
+                if (resultCount > 0 && buffer.Span[0].IsNil)
                 {
                     file.Close();
                 }
@@ -146,7 +146,7 @@ public sealed class IOLibrary
     {
         var io = context.State.Environment["io"].Read<LuaTable>();
 
-        if (context.ArgumentCount == 0 || context.Arguments[0].Type is LuaValueType.Nil)
+        if (context.ArgumentCount == 0 || context.Arguments[0].IsNil)
         {
             buffer.Span[0] = io["stdout"];
             return new(1);

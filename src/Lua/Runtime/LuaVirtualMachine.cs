@@ -167,7 +167,7 @@ public static partial class LuaVirtualMachine
             if (TaskResult == 0) return;
             if (TaskResult == 1)
             {
-                ResultsBuffer[0] = default;
+                ResultsBuffer[0] = LuaValue.Nil;
                 return;
             }
 
@@ -180,7 +180,7 @@ public static partial class LuaVirtualMachine
             if (count == 0) return;
             if (count == 1)
             {
-                ResultsBuffer[0] = default;
+                ResultsBuffer[0] = LuaValue.Nil;
                 return;
             }
 
@@ -448,7 +448,8 @@ public static partial class LuaVirtualMachine
                         stackHead = ref stack.FastGet(frameBase);
                         vb = ref RKB(ref stackHead, ref constHead, instruction);
                         vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        if (vb.Type == LuaValueType.Number && vc.Type == LuaValueType.Number)
+                        var numberMarker = LuaValue.NumberMarker;
+                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
                         {
                             Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() + vc.UnsafeReadDouble();
                             stack.NotifyTop(iA + frameBase + 1);
@@ -476,8 +477,8 @@ public static partial class LuaVirtualMachine
                         stackHead = ref stack.FastGet(frameBase);
                         vb = ref RKB(ref stackHead, ref constHead, instruction);
                         vc = ref RKC(ref stackHead, ref constHead, instruction);
-
-                        if (vb.Type == LuaValueType.Number && vc.Type == LuaValueType.Number)
+                        numberMarker = LuaValue.NumberMarker;
+                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
                         {
                             ra1 = iA + frameBase + 1;
                             Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() - vc.UnsafeReadDouble();
@@ -509,7 +510,8 @@ public static partial class LuaVirtualMachine
                         vb = ref RKB(ref stackHead, ref constHead, instruction);
                         vc = ref RKC(ref stackHead, ref constHead, instruction);
 
-                        if (vb.Type == LuaValueType.Number && vc.Type == LuaValueType.Number)
+                         numberMarker = LuaValue.NumberMarker;
+                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
                         {
                             ra1 = iA + frameBase + 1;
                             Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() * vc.UnsafeReadDouble();
@@ -541,7 +543,8 @@ public static partial class LuaVirtualMachine
                         vb = ref RKB(ref stackHead, ref constHead, instruction);
                         vc = ref RKC(ref stackHead, ref constHead, instruction);
 
-                        if (vb.Type == LuaValueType.Number && vc.Type == LuaValueType.Number)
+                         numberMarker = LuaValue.NumberMarker;
+                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
                         {
                             ra1 = iA + frameBase + 1;
                             Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() / vc.UnsafeReadDouble();
@@ -903,7 +906,7 @@ public static partial class LuaVirtualMachine
                         ra1 = iA + frameBase + 1;
                         ref var forState = ref stack.Get(ra1);
 
-                        if (forState.Type is not LuaValueType.Nil)
+                        if (forState.IsNotNil)
                         {
                             Unsafe.Add(ref forState, -1) = forState;
                             context.Pc += instruction.SBx;
@@ -936,7 +939,7 @@ public static partial class LuaVirtualMachine
                         {
                             Unsafe.Add(ref stackHead, ra + i) = frameVariableArgumentCount > i
                                 ? Unsafe.Add(ref stackHead, frameBase - (frameVariableArgumentCount - i))
-                                : default;
+                                : LuaValue.Nil;
                         }
 
                         stack.NotifyTop(ra + count);
@@ -1102,7 +1105,7 @@ public static partial class LuaVirtualMachine
                 for (int i = 0; i < resultCount; i++)
                 {
                     Unsafe.Add(ref stackHead, i) = i >= rawResultCount
-                        ? default
+                        ? LuaValue.Nil
                         : results[i];
                 }
 
@@ -1140,7 +1143,7 @@ public static partial class LuaVirtualMachine
             for (int i = 0; i < resultCount; i++)
             {
                 Unsafe.Add(ref stackHead, i) = i >= rawResultCount
-                    ? default
+                    ? LuaValue.Nil
                     : results[i];
             }
 
@@ -1355,7 +1358,7 @@ public static partial class LuaVirtualMachine
             context.Thread.PopCallStackFrame();
             var ra = context.Instruction.A + context.FrameBase;
             var resultCount = awaiter.GetResult();
-            context.Stack.Get(ra) = resultCount == 0 ? default : context.ResultsBuffer[0];
+            context.Stack.Get(ra) = resultCount == 0 ? LuaValue.Nil : context.ResultsBuffer[0];
             if (isSelf)
             {
                 context.Stack.Get(ra + 1) = table;
@@ -1370,10 +1373,10 @@ public static partial class LuaVirtualMachine
             return true;
         }
 
-        if (table.Type == LuaValueType.Table)
+        if (table.IsTable)
         {
             var ra = context.Instruction.A + context.FrameBase;
-            context.Stack.Get(ra) = default;
+            context.Stack.Get(ra) = LuaValue.Nil;
             if (isSelf)
             {
                 context.Stack.Get(ra + 1) = table;

@@ -102,7 +102,7 @@ public sealed class BasicLibrary
 
     public ValueTask<int> Error(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
     {
-        var value = context.ArgumentCount == 0 || context.Arguments[0].Type is LuaValueType.Nil
+        var value = context.ArgumentCount == 0 || context.Arguments[0].IsNil
             ? "(error object is a nil value)"
             : context.Arguments[0];
 
@@ -406,7 +406,7 @@ public sealed class BasicLibrary
         {
             throw new LuaRuntimeException(context.State.GetTraceback(), "cannot change a protected metatable");
         }
-        else if (arg1.Type is LuaValueType.Nil)
+        else if (arg1.IsNil)
         {
             arg0.Metatable = null;
         }
