@@ -69,8 +69,8 @@ internal struct Union
 internal enum InnerType : uint
 {
    // Nil = 0xffff0001,
-    TRUE = 0xffff0001,
-    FALSE = 0xffff0002,
+    FALSE = 0xffff0001,
+    TRUE = 0xffff0002,
     String = 0xffff0003,
     Function = 0xffff0004,
     Thread = 0xffff0005,
@@ -78,7 +78,7 @@ internal enum InnerType : uint
     Table = 0xffff0007,
 }
 
-[StructLayout(LayoutKind.Auto)]
+[StructLayout(LayoutKind.Sequential)]
 public readonly struct LuaValue : IEquatable<LuaValue>
 {
     public static  LuaValue Nil => default;
@@ -91,17 +91,32 @@ public readonly struct LuaValue : IEquatable<LuaValue>
             return union.LuaType;
         }
     }
-
     readonly Union union;
     internal readonly object? referenceValue;
-    internal static readonly object NumberMarker = new();
     
-    internal bool IsNil => union.RawValue==0&&referenceValue==null;
-    internal bool IsNotNil => union.RawValue!=0||referenceValue!=null;
+    
+
+    internal static unsafe object NumberMarker
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get
+        {
+            nuint one = 1;
+            return Unsafe.As<nuint, object>(ref one);
+        }
+    }
+    
+    internal bool IsNil =>referenceValue==null && union.RawValue == 0;
+    internal bool IsNotNil => referenceValue!=null || union.RawValue != 0;
     internal bool IsBoolean => union.IsBoolean;
     internal bool IsTrue => union.IsTrue;
     internal bool IsFalse => union.IsFalse;
-    internal bool IsNumber => referenceValue==NumberMarker;
+    internal  bool IsNumber
+    {
+        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+        get => Unsafe.As<LuaValue,nint>(ref Unsafe.AsRef(in this)) == 1;
+    }
+
     internal bool IsString => union.Type == InnerType.String;
     internal bool IsFunction => union.Type == InnerType.Function;
     internal bool IsThread => union.Type == InnerType.Thread;
@@ -281,7 +296,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal bool TryReadNumber(out double result)
     {
-        if (referenceValue == NumberMarker)
+        if (IsNumber)
         {
             result = union.Number;
             return true;
@@ -461,27 +476,21 @@ public readonly struct LuaValue : IEquatable<LuaValue>
     public bool ToBoolean()
     {
         if (IsNil) return false;
-        switch (union.Type)
-        {
-            case InnerType.TRUE:
-                return true;
-            case InnerType.FALSE:
-                return false;
-        }
-        return true;
+        return union.Type != InnerType.FALSE;
     }
    
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public LuaValue(bool value)
     {
-        union = new(value);
+        var increment = value ? 1 : 0;
+        union.Type = (InnerType)(increment + 0xffff0001);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public LuaValue(double value)
+    public  LuaValue(double value)
     {
+        Unsafe.As<LuaValue, nint>(ref Unsafe.AsRef(in this)) = 1;
         union = new(value);
-        referenceValue = NumberMarker;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]

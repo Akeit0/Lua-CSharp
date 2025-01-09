@@ -1,3 +1,4 @@
+using System.Runtime.CompilerServices;
 using Lua.CodeAnalysis.Syntax;
 using Lua.CodeAnalysis.Compilation;
 using Lua.Runtime;
@@ -11,7 +12,7 @@ state.Environment["vec3"] = new LVec3();
 
 try
 {
-    var source = File.ReadAllText("test.lua");
+    var source = File.ReadAllText(GetAbsolutePath("test.lua"));
 
     var syntaxTree = LuaSyntaxTree.Parse(source, "test.lua");
 
@@ -36,13 +37,22 @@ try
         Console.WriteLine(results[i]);
     }
 
+    
+
     Console.WriteLine("End " + new string('-', 50));
+    unsafe
+    {
+        Console.WriteLine(sizeof(LuaValue));
+    }
 }
 catch (Exception ex)
 {
     Console.WriteLine(ex);
 }
-
+static string GetAbsolutePath(string relativePath, [CallerFilePath] string callerFilePath = "")
+{
+    return Path.Combine(Path.GetDirectoryName(callerFilePath)!, relativePath);
+}
 static void DebugChunk(Chunk chunk, int id)
 {
     Console.WriteLine($"Chunk[{id}]" + new string('=', 50));

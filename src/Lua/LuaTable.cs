@@ -100,9 +100,11 @@ public sealed class LuaTable
 
         if (TryGetInteger(key, out var index))
         {
-            if (index > 0 && index <= array.Length)
+            var i = index - 1;
+            var a = array;
+            if ((uint)i< (uint)a.Length)
             {
-                value = array[index - 1];
+                value = a[i];
                 return value.IsNotNil;
             }
         }
@@ -119,8 +121,14 @@ public sealed class LuaTable
 
         if (TryGetInteger(key, out var index))
         {
-            return index > 0 && index <= array.Length &&
-                   array[index - 1].Type != LuaValueType.Nil;
+            var i = index - 1;
+            var a = array;
+            if ((uint)i < (uint)a.Length)
+            {
+                return a[i].IsNotNil;
+            }
+            return false;
+            
         }
 
         return dictionary.TryGetValue(key, out var value) && value.IsNotNil;

@@ -107,7 +107,7 @@ public static partial class LuaVirtualMachine
                     break;
 
                 case OpCode.Self:
-                    Stack.Get(target) = result.Length == 0 ? LuaValue.Nil : result[0];
+                    Stack.Get(target) = result.Length == 0 ? default : result[0];
                     Thread.PopCallStackFrameUnsafe(target + 2);
                     return true;
                 case OpCode.SetTable or OpCode.SetTabUp:
@@ -167,7 +167,7 @@ public static partial class LuaVirtualMachine
             if (TaskResult == 0) return;
             if (TaskResult == 1)
             {
-                ResultsBuffer[0] = LuaValue.Nil;
+                ResultsBuffer[0] = default;
                 return;
             }
 
@@ -180,7 +180,7 @@ public static partial class LuaVirtualMachine
             if (count == 0) return;
             if (count == 1)
             {
-                ResultsBuffer[0] = LuaValue.Nil;
+                ResultsBuffer[0] = default;
                 return;
             }
 
@@ -200,7 +200,7 @@ public static partial class LuaVirtualMachine
                     case PostOperationType.Nop: break;
                     case PostOperationType.SetResult:
                         var RA = Instruction.A + FrameBase;
-                        Stack.Get(RA) = TaskResult == 0 ? LuaValue.Nil : ResultsBuffer[0];
+                        Stack.Get(RA) = TaskResult == 0 ? default : ResultsBuffer[0];
                         Stack.NotifyTop(RA + 1);
                         ClearResultsBuffer();
                         break;
@@ -273,7 +273,6 @@ public static partial class LuaVirtualMachine
             var stack = context.Stack;
             stack.EnsureCapacity(frameBase + context.Chunk.MaxStackPosition);
             ref var constHead = ref MemoryMarshalEx.UnsafeElementAt(context.Chunk.Constants, 0);
-
             while (true)
             {
                 var instructionRef = Unsafe.Add(ref instructionsHead, ++context.Pc);
@@ -293,21 +292,21 @@ public static partial class LuaVirtualMachine
                         continue;
                     case OpCode.LoadBool:
                         instruction = instructionRef;
-                        stack.GetWithNotifyTop(instruction.A + frameBase) = instruction.B != 0;
+                        stack.GetWithNotifyTop(instruction.A + frameBase)= instruction.B != 0;
                         if (instruction.C != 0) context.Pc++;
                         continue;
-                    case OpCode.LoadNil:
+                    case OpCode.LoadNil://LoadNil
                         instruction = instructionRef;
                         var ra1 = instruction.A + frameBase + 1;
                         var iB = instruction.B;
                         stack.GetBuffer().Slice(ra1 - 1, iB + 1).Clear();
                         stack.NotifyTop(ra1 + iB);
                         continue;
-                    case OpCode.GetUpVal:
+                    case OpCode.GetUpVal://GetUpVal
                         instruction = instructionRef;
                         stack.GetWithNotifyTop(instruction.A + frameBase) = context.Closure.GetUpValue(instruction.B);
                         continue;
-                    case OpCode.GetTabUp:
+                    case OpCode.GetTabUp://GetTabUp
                         instruction = instructionRef;
                         stackHead = ref stack.FastGet(frameBase);
                         ref readonly var vc = ref RKC(ref stackHead, ref constHead, instruction);
@@ -315,7 +314,10 @@ public static partial class LuaVirtualMachine
 
                         if (table.TryReadTable(out var luaTable) && luaTable.TryGetValue(vc, out var resultValue))
                         {
-                            stack.GetWithNotifyTop(instruction.A + frameBase) = resultValue;
+                            iA = instruction.A;
+                            Unsafe.Add(ref stackHead, iA) = resultValue;
+                            stack.NotifyTop(iA + frameBase + 1);
+                            //stack.GetWithNotifyTop(instruction.A + frameBase) = resultValue;
                             continue;
                         }
 
@@ -327,14 +329,16 @@ public static partial class LuaVirtualMachine
 
                         postOperation = PostOperationType.SetResult;
                         return true;
-                    case OpCode.GetTable:
+                    case OpCode.GetTable://GetTable
                         instruction = instructionRef;
                         stackHead = ref stack.FastGet(frameBase);
                         ref readonly var vb = ref Unsafe.Add(ref stackHead, instruction.UIntB);
                         vc = ref RKC(ref stackHead, ref constHead, instruction);
                         if (vb.TryReadTable(out luaTable) && luaTable.TryGetValue(vc, out resultValue))
                         {
-                            stack.GetWithNotifyTop(instruction.A + frameBase) = resultValue;
+                            iA = instruction.A;
+                            Unsafe.Add(ref stackHead, iA) = resultValue;
+                            stack.NotifyTop(iA + frameBase + 1);
                             continue;
                         }
 
@@ -346,7 +350,7 @@ public static partial class LuaVirtualMachine
 
                         postOperation = PostOperationType.SetResult;
                         return true;
-                    case OpCode.SetTabUp:
+                    case OpCode.SetTabUp://SetTabUp
                         instruction = instructionRef;
                         stackHead = ref stack.FastGet(frameBase);
                         vb = ref RKB(ref stackHead, ref constHead, instruction);
@@ -377,11 +381,11 @@ public static partial class LuaVirtualMachine
                         postOperation = PostOperationType.Nop;
                         return true;
 
-                    case OpCode.SetUpVal:
+                    case OpCode.SetUpVal://SetUpVal
                         instruction = instructionRef;
                         context.Closure.SetUpValue(instruction.B, stack.FastGet(instruction.A + frameBase));
                         continue;
-                    case OpCode.SetTable:
+                    case OpCode.SetTable://SetTable
                         instruction = instructionRef;
                         stackHead = ref stack.FastGet(frameBase);
                         vb = ref RKB(ref stackHead, ref constHead, instruction);
@@ -443,172 +447,55 @@ public static partial class LuaVirtualMachine
                         postOperation = PostOperationType.Self;
                         return true;
                     case OpCode.Add:
-                        instruction = instructionRef;
-                        iA = instruction.A;
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        var numberMarker = LuaValue.NumberMarker;
-                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
-                        {
-                            Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() + vc.UnsafeReadDouble();
-                            stack.NotifyTop(iA + frameBase + 1);
-                            continue;
-                        }
-
-                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out var numC))
-                        {
-                            Unsafe.Add(ref stackHead, iA) = numB + numC;
-                            stack.NotifyTop(iA + frameBase + 1);
-                            continue;
-                        }
-
-                        if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Add, "add", out doRestart))
-                        {
-                            if (doRestart) goto Restart;
-                            continue;
-                        }
-
-                        postOperation = PostOperationType.SetResult;
-                        return true;
                     case OpCode.Sub:
-                        instruction = instructionRef;
-                        iA = instruction.A;
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        numberMarker = LuaValue.NumberMarker;
-                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() - vc.UnsafeReadDouble();
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out numC))
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = numB - numC;
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Sub, "sub", out doRestart))
-                        {
-                            if (doRestart) goto Restart;
-                            continue;
-                        }
-
-                        postOperation = PostOperationType.SetResult;
-                        return true;
-
                     case OpCode.Mul:
-                        instruction = instructionRef;
-                        iA = instruction.A;
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-
-                         numberMarker = LuaValue.NumberMarker;
-                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() * vc.UnsafeReadDouble();
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out numC))
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = numB * numC;
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Mul, "mul", out doRestart))
-                        {
-                            if (doRestart) goto Restart;
-                            continue;
-                        }
-
-                        postOperation = PostOperationType.SetResult;
-                        return true;
-
                     case OpCode.Div:
-                        instruction = instructionRef;
-                        iA = instruction.A;
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-
-                         numberMarker = LuaValue.NumberMarker;
-                        if (vb.referenceValue==numberMarker && vc.referenceValue==numberMarker)
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = vb.UnsafeReadDouble() / vc.UnsafeReadDouble();
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out numC))
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = numB / numC;
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Div, "div", out doRestart))
-                        {
-                            if (doRestart) goto Restart;
-                            continue;
-                        }
-
-                        postOperation = PostOperationType.SetResult;
-                        return true;
                     case OpCode.Mod:
-                        instruction = instructionRef;
-                        iA = instruction.A;
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out numC))
-                        {
-                            var mod = numB % numC;
-                            if ((numC > 0 && mod < 0) || (numC < 0 && mod > 0))
-                            {
-                                mod += numC;
-                            }
-
-                            Unsafe.Add(ref stackHead, iA) = mod;
-                            continue;
-                        }
-
-                        if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Mod, "mod", out doRestart))
-                        {
-                            if (doRestart) goto Restart;
-                            continue;
-                        }
-
-                        postOperation = PostOperationType.SetResult;
-                        return true;
                     case OpCode.Pow:
                         instruction = instructionRef;
                         iA = instruction.A;
                         stackHead = ref stack.FastGet(frameBase);
                         vb = ref RKB(ref stackHead, ref constHead, instruction);
                         vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out numC))
+                        
+                        static double Mod(double a, double b)
                         {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = Math.Pow(numB, numC);
-                            stack.NotifyTop(ra1);
+                            var mod = a % b;
+                            if ((b > 0 && mod < 0) || (b < 0 && mod > 0))
+                            {
+                                mod += b;
+                            }
+
+                            return mod;
+                        }
+                        [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                        static double Arith( int op,double a, double b) =>
+                            op switch
+                            {
+                                0 => a + b,
+                                1 => a - b,
+                                2 => a * b,
+                                3 => a/b,
+                                4 =>Mod(a,b),
+                                5 =>Math.Pow(a,b),
+                            };
+                        //var numberMarker = LuaValue.NumberMarker;
+                        if (vb.IsNumber && vc.IsNumber)
+                        {
+                            //stack.GetWithNotifyTop(iA + frameBase + 1) = vb.UnsafeReadDouble() + vc.UnsafeReadDouble();
+                            Unsafe.Add(ref stackHead, iA) = Arith((int)instruction.OpCode-13,vb.UnsafeReadDouble() ,vc.UnsafeReadDouble());
+                            stack.NotifyTop(iA + frameBase + 1);
                             continue;
                         }
 
-                        if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Pow, "pow", out doRestart))
+                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out var numC))
+                        {
+                            Unsafe.Add(ref stackHead, iA) = Arith((int)instruction.OpCode-13,numB ,numC);
+                            stack.NotifyTop(iA + frameBase + 1);
+                            continue;
+                        }
+
+                        if (ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Add, "add", out doRestart))
                         {
                             if (doRestart) goto Restart;
                             continue;
@@ -646,7 +533,6 @@ public static partial class LuaVirtualMachine
                         Unsafe.Add(ref stackHead, iA) = !Unsafe.Add(ref stackHead, instruction.UIntB).ToBoolean();
                         stack.NotifyTop(ra1);
                         continue;
-
                     case OpCode.Len:
                         instruction = instructionRef;
                         stackHead = ref stack.FastGet(frameBase);
@@ -939,12 +825,11 @@ public static partial class LuaVirtualMachine
                         {
                             Unsafe.Add(ref stackHead, ra + i) = frameVariableArgumentCount > i
                                 ? Unsafe.Add(ref stackHead, frameBase - (frameVariableArgumentCount - i))
-                                : LuaValue.Nil;
+                                : default;
                         }
 
                         stack.NotifyTop(ra + count);
                         continue;
-                    case OpCode.ExtraArg:
                     default:
                         ThrowLuaNotImplementedException(ref context, context.Instruction.OpCode);
                         return true;
@@ -983,7 +868,7 @@ public static partial class LuaVirtualMachine
         throw new LuaRuntimeException(context.State.GetTraceback(), $"OpCode {opcode} is not implemented");
     }
 
-
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static void SelfPostOperation(ref VirtualMachineExecutionContext context)
     {
         var stack = context.Stack;
@@ -998,6 +883,7 @@ public static partial class LuaVirtualMachine
         context.ClearResultsBuffer();
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static bool Concat(ref VirtualMachineExecutionContext context, out bool doRestart)
     {
         var instruction = context.Instruction;
@@ -1035,6 +921,7 @@ public static partial class LuaVirtualMachine
         return ExecuteBinaryOperationMetaMethod(vb, vc, ref context, Metamethods.Concat, "concat", out doRestart);
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static bool Call(ref VirtualMachineExecutionContext context, out bool doRestart)
     {
         var instruction = context.Instruction;
@@ -1116,7 +1003,8 @@ public static partial class LuaVirtualMachine
             return true;
         }
     }
-
+    
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static void CallPostOperation(ref VirtualMachineExecutionContext context)
     {
         var instruction = context.Instruction;
@@ -1152,6 +1040,7 @@ public static partial class LuaVirtualMachine
         }
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static bool TailCall(ref VirtualMachineExecutionContext context, out bool doRestart)
     {
         var instruction = context.Instruction;
@@ -1210,6 +1099,7 @@ public static partial class LuaVirtualMachine
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static bool TForCall(ref VirtualMachineExecutionContext context, out bool doRestart)
     {
         doRestart = false;
@@ -1252,6 +1142,7 @@ public static partial class LuaVirtualMachine
         return true;
     }
 
+    [MethodImpl(MethodImplOptions.NoInlining)]
     static void TForCallPostOperation(ref VirtualMachineExecutionContext context)
     {
         var stack = context.Stack;
@@ -1318,7 +1209,7 @@ public static partial class LuaVirtualMachine
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static bool TryGetMetaTableValue(LuaValue table, LuaValue key, ref VirtualMachineExecutionContext context, out bool doRestart)
+    static bool TryGetMetaTableValue(in LuaValue table,in LuaValue key, ref VirtualMachineExecutionContext context, out bool doRestart)
     {
         var isSelf = context.Instruction.OpCode == OpCode.Self;
         doRestart = false;
@@ -1395,7 +1286,8 @@ public static partial class LuaVirtualMachine
         return false;
     }
 
-    static bool TrySetMetaTableValue(LuaValue table, LuaValue key, LuaValue value,
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    static bool TrySetMetaTableValue(in LuaValue table,in LuaValue key,in LuaValue value,
         ref VirtualMachineExecutionContext context, out bool doRestart)
     {
         doRestart = false;
@@ -1439,7 +1331,7 @@ public static partial class LuaVirtualMachine
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static bool ExecuteBinaryOperationMetaMethod(LuaValue vb, LuaValue vc,
+    static bool ExecuteBinaryOperationMetaMethod(in LuaValue vb,in LuaValue vc,
         ref VirtualMachineExecutionContext context, string name, string description, out bool doRestart)
     {
         doRestart = false;
@@ -1488,7 +1380,7 @@ public static partial class LuaVirtualMachine
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static bool ExecuteUnaryOperationMetaMethod(LuaValue vb, ref VirtualMachineExecutionContext context,
+    static bool ExecuteUnaryOperationMetaMethod(in LuaValue vb, ref VirtualMachineExecutionContext context,
         string name, string description, bool isLen, out bool doRestart)
     {
         doRestart = false;
@@ -1541,7 +1433,7 @@ public static partial class LuaVirtualMachine
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    static bool ExecuteCompareOperationMetaMethod(LuaValue vb, LuaValue vc,
+    static bool ExecuteCompareOperationMetaMethod( LuaValue vb, LuaValue vc,
         ref VirtualMachineExecutionContext context, string name, string? description, out bool doRestart)
     {
         doRestart = false;
