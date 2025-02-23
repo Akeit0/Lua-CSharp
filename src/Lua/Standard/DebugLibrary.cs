@@ -16,6 +16,8 @@ public class DebugLibrary
             new("setlocal", SetLocal),
             new("getupvalue", GetUpValue),
             new("setupvalue", SetUpValue),
+            new("getuservalue", GetUserValue),
+            new("setuservalue", SetUserValue),
             new("getmetatable", GetMetatable),
             new("setmetatable", SetMetatable),
             new("traceback", Traceback),
@@ -220,6 +222,37 @@ public class DebugLibrary
         return new(1);
     }
 
+    public ValueTask<int> GetUserValue(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    {
+        var iUserData = context.GetArgument<ILuaUserData>(0);
+        var index = context.GetArgument<int>(1);
+        if (iUserData is not LuaUserData userData || index < 1 || index > userData.Values.Length)
+        {
+            buffer.Span[0] = LuaValue.Nil;
+            return new(1);
+        }
+
+        buffer.Span[0] = userData.Values[index - 1];
+        return new(1);
+    }
+
+    public ValueTask<int> SetUserValue(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    {
+        var iUserData = context.GetArgument<ILuaUserData>(0);
+        var value = context.GetArgument(1);
+        var index = context.GetArgument<int>(2);
+        if (iUserData is not LuaUserData userData ||
+            index < 1 || index > userData.Values.Length)
+        {
+            buffer.Span[0] = LuaValue.Nil;
+            return new(1);
+        }
+
+        userData.Values[index - 1] = value;
+        buffer.Span[0] = new LuaValue(iUserData);
+        return new(1);
+    }
+
     public ValueTask<int> GetMetatable(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
     {
         var arg0 = context.GetArgument(0);
@@ -270,13 +303,13 @@ public class DebugLibrary
             buffer.Span[0] = LuaValue.Nil;
             return new(1);
         }
-        
-        var currentFrame =thread.GetCallStackFrames().Length>0? thread.GetCallStackFrames()[^1]:default;
+
+        var currentFrame = thread.GetCallStackFrames().Length > 0 ? thread.GetCallStackFrames()[^1] : default;
         thread.PushCallStackFrame(currentFrame);
         var callStack = thread.GetCallStackFrames();
         var skipCount = Math.Min(level, callStack.Length - 1);
         var frames = callStack[1..^skipCount];
-        buffer.Span[0] = Runtime.Traceback.GetTracebackString(context.State,(Closure)callStack[0].Function, frames, message);
+        buffer.Span[0] = Runtime.Traceback.GetTracebackString(context.State, (Closure)callStack[0].Function, frames, message);
         thread.PopCallStackFrame();
         return new(1);
     }

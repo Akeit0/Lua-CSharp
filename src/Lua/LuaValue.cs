@@ -14,6 +14,7 @@ public enum LuaValueType : byte
     Number,
     Function,
     Thread,
+    LightUserData,
     UserData,
     Table,
 }
@@ -138,6 +139,9 @@ public readonly struct LuaValue : IEquatable<LuaValue>
                 {
                     break;
                 }
+            case LuaValueType.LightUserData:
+                result = (T)referenceValue!;
+                    return true;
             case LuaValueType.UserData:
                 if (t == typeof(ILuaUserData) || typeof(ILuaUserData).IsAssignableFrom(t))
                 {
@@ -360,6 +364,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
             case LuaValueType.Thread:
             case LuaValueType.Function:
             case LuaValueType.Table:
+            case LuaValueType.LightUserData:
             case LuaValueType.UserData:
                 {
                     var v = referenceValue!;
@@ -376,6 +381,12 @@ public readonly struct LuaValue : IEquatable<LuaValue>
         if (Type == LuaValueType.Boolean) return value != 0;
         if (Type is LuaValueType.Nil) return false;
         return true;
+    }
+
+    internal LuaValue(object obj)
+    {
+        Type = LuaValueType.LightUserData;
+        referenceValue = obj;
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -517,6 +528,7 @@ public readonly struct LuaValue : IEquatable<LuaValue>
             LuaValueType.Function => $"function: {referenceValue!.GetHashCode()}",
             LuaValueType.Thread => $"thread: {referenceValue!.GetHashCode()}",
             LuaValueType.Table => $"table: {referenceValue!.GetHashCode()}",
+            LuaValueType.LightUserData => $"userdata: {referenceValue!.GetHashCode()}",
             LuaValueType.UserData => $"userdata: {referenceValue!.GetHashCode()}",
             _ => "",
         };
@@ -554,7 +566,11 @@ public readonly struct LuaValue : IEquatable<LuaValue>
             result = LuaValueType.Thread;
             return true;
         }
-
+        else if (type == typeof(ILuaUserData) || type.IsAssignableFrom(typeof(ILuaUserData)))
+        {
+            result = LuaValueType.UserData;
+            return true;
+        }
         result = default;
         return false;
     }
