@@ -22,6 +22,7 @@ public class DebugLibrary
             new("setmetatable", SetMetatable),
             new("traceback", Traceback),
             new("getregistry", GetRegistry),
+            new("upvalueid", UpValueId),
             new("upvaluejoin", UpValueJoin),
             new("getinfo", GetInfo),
         ];
@@ -317,6 +318,28 @@ public class DebugLibrary
     public ValueTask<int> GetRegistry(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
     {
         buffer.Span[0] = context.State.Registry;
+        return new(1);
+    }
+
+    public ValueTask<int> UpValueId(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    {
+        var n1 = context.GetArgument<int>(1);
+        var f1 = context.GetArgument<LuaFunction>(0);
+
+        if (f1 is not Closure closure)
+        {
+            buffer.Span[0] = LuaValue.Nil;
+            return new(1);
+        }
+
+        var upValues = closure.GetUpValuesSpan();
+        if (n1 <= 0 || n1 > upValues.Length)
+        {
+            buffer.Span[0] = LuaValue.Nil;
+            return new(1);
+        }
+
+        buffer.Span[0] = new LuaValue(upValues[n1 - 1]);
         return new(1);
     }
 
