@@ -9,7 +9,7 @@ public sealed class Closure : LuaFunction
     FastListCore<UpValue> upValues;
 
     public Closure(LuaState state, Chunk proto, LuaTable? environment = null)
-        : base(proto.Name, (context, buffer, ct) => LuaVirtualMachine.ExecuteClosureAsync(context.State, buffer, ct))
+        : base(proto.Name, (context, ct) => LuaVirtualMachine.ExecuteClosureAsync(context.State, ct))
     {
         this.proto = proto;
 
@@ -60,6 +60,8 @@ public sealed class Closure : LuaFunction
         {
             return parentClosure.UpValues[description.Index];
         }
+        
+        Console.WriteLine($"Failed to get upvalue from description {description} {thread.GetCallStackFrames()[^1].Function.Name}");
 
         throw new Exception();
     }

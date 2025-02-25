@@ -52,7 +52,17 @@ public class LuaTests
     [Test]
     public async Task Test_Coroutine()
     {
-        await state.DoFileAsync(FileHelper.GetAbsolutePath("tests-lua/coroutine.lua"));
+        try
+        {
+await state.DoFileAsync(FileHelper.GetAbsolutePath("tests-lua/coroutine.lua"));
+        }
+        catch (LuaRuntimeException e)
+        {
+            Console.WriteLine(e);
+             Console.WriteLine(e.LuaTraceback.ToString());
+            throw;
+        }
+        
     }
 
     [Test]

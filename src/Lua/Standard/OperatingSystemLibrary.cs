@@ -26,13 +26,13 @@ public sealed class OperatingSystemLibrary
 
     public readonly LuaFunction[] Functions;
 
-    public ValueTask<int> Clock(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Clock(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
-        buffer.Span[0] = DateTimeHelper.GetUnixTime(DateTime.UtcNow, Process.GetCurrentProcess().StartTime);
-        return new(1);
+        context.Return(DateTimeHelper.GetUnixTime(DateTime.UtcNow, Process.GetCurrentProcess().StartTime));
+        return default;
     }
 
-    public ValueTask<int> Date(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Date(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var format = context.HasArgument(0)
             ? context.GetArgument<string>(0).AsSpan()
@@ -74,25 +74,25 @@ public sealed class OperatingSystemLibrary
             table["yday"] = now.DayOfYear;
             table["isdst"] = isDst;
 
-            buffer.Span[0] = table;
+            context.Return(table);
         }
         else
         {
-            buffer.Span[0] = DateTimeHelper.StrFTime(context.State, format, now);
+            context.Return(DateTimeHelper.StrFTime(context.State, format, now));
         }
 
-        return new(1);
+        return default;
     }
 
-    public ValueTask<int> DiffTime(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask DiffTime(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var t2 = context.GetArgument<double>(0);
         var t1 = context.GetArgument<double>(1);
-        buffer.Span[0] = t2 - t1;
-        return new(1);
+        context.Return(t2 - t1);
+        return default;
     }
 
-    public ValueTask<int> Execute(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Execute(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         // os.execute(command) is not supported
 
@@ -102,12 +102,12 @@ public sealed class OperatingSystemLibrary
         }
         else
         {
-            buffer.Span[0] = false;
-            return new(1);
+            context.Return(false);
+        return default;
         }
     }
 
-    public ValueTask<int> Exit(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Exit(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         // Ignore 'close' parameter
 
@@ -133,80 +133,76 @@ public sealed class OperatingSystemLibrary
             Environment.Exit(0);
         }
 
-        return new(0);
+        return default;
     }
 
-    public ValueTask<int> GetEnv(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask GetEnv(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var variable = context.GetArgument<string>(0);
-        buffer.Span[0] = Environment.GetEnvironmentVariable(variable) ?? LuaValue.Nil;
-        return new(1);
+        context.Return(Environment.GetEnvironmentVariable(variable) ?? LuaValue.Nil);
+        return default;
     }
 
-    public ValueTask<int> Remove(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Remove(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var fileName = context.GetArgument<string>(0);
         try
         {
             File.Delete(fileName);
-            buffer.Span[0] = true;
-            return new(1);
+            context.Return(true);
+        return default;
         }
         catch (IOException ex)
         {
-            buffer.Span[0] = LuaValue.Nil;
-            buffer.Span[1] = ex.Message;
-            buffer.Span[2] = ex.HResult;
-            return new(3);
+            context.Return(LuaValue.Nil, ex.Message, ex.HResult);
+            return default;
         }
     }
 
-    public ValueTask<int> Rename(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Rename(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var oldName = context.GetArgument<string>(0);
         var newName = context.GetArgument<string>(1);
         try
         {
             File.Move(oldName, newName);
-            buffer.Span[0] = true;
-            return new(1);
+            context.Return(true);
+        return default;
         }
         catch (IOException ex)
         {
-            buffer.Span[0] = LuaValue.Nil;
-            buffer.Span[1] = ex.Message;
-            buffer.Span[2] = ex.HResult;
-            return new(3);
+            context.Return(LuaValue.Nil, ex.Message, ex.HResult);
+            return default;
         }
     }
 
-    public ValueTask<int> SetLocale(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask SetLocale(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         // os.setlocale is not supported (always return nil)
 
-        buffer.Span[0] = LuaValue.Nil;
-        return new(1);
+        context.Return(LuaValue.Nil);
+        return default;
     }
 
-    public ValueTask<int> Time(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Time(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         if (context.HasArgument(0))
         {
             var table = context.GetArgument<LuaTable>(0);
             var date = DateTimeHelper.ParseTimeTable(context.State, table);
-            buffer.Span[0] = DateTimeHelper.GetUnixTime(date);
-            return new(1);
+            context.Return(DateTimeHelper.GetUnixTime(date));
+        return default;
         }
         else
         {
-            buffer.Span[0] = DateTimeHelper.GetUnixTime(DateTime.UtcNow);
-            return new(1);
+            context.Return(DateTimeHelper.GetUnixTime(DateTime.UtcNow));
+        return default;
         }
     }
 
-    public ValueTask<int> TmpName(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask TmpName(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
-        buffer.Span[0] = Path.GetTempFileName();
-        return new(1);
+        context.Return(Path.GetTempFileName());
+        return default;
     }
 }

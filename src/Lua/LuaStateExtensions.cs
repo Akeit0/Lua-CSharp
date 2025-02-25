@@ -6,11 +6,13 @@ namespace Lua;
 
 public static class LuaStateExtensions
 {
-    public static ValueTask<int> DoStringAsync(this LuaState state, string source, Memory<LuaValue> buffer, string? chunkName = null, CancellationToken cancellationToken = default)
+    public static async ValueTask<int> DoStringAsync(this LuaState state, string source, Memory<LuaValue> buffer, string? chunkName = null, CancellationToken cancellationToken = default)
     {
         var syntaxTree = LuaSyntaxTree.Parse(source, chunkName);
         var chunk = LuaCompiler.Default.Compile(syntaxTree, chunkName);
-        return state.RunAsync(chunk, buffer, cancellationToken);
+        using var result = await state.RunAsync(chunk, cancellationToken);
+        result.AsSpan().CopyTo(buffer.Span);
+        return result.Count;
     }
 
     public static async ValueTask<LuaValue[]> DoStringAsync(this LuaState state, string source, string? chunkName = null, CancellationToken cancellationToken = default)
@@ -33,7 +35,12 @@ public static class LuaStateExtensions
         var fileName = Path.GetFileName(path);
         var syntaxTree = LuaSyntaxTree.Parse(text, fileName);
         var chunk = LuaCompiler.Default.Compile(syntaxTree, fileName);
-        return await state.RunAsync(chunk, buffer, cancellationToken);
+       await state.RunAsync(chunk, cancellationToken);
+        var stack = state.CurrentThread.Stack;
+        stack.AsSpan().CopyTo(buffer.Span);
+        var count = stack.Count;
+        stack.Clear();
+        return count;
     }
 
     public static async ValueTask<LuaValue[]> DoFileAsync(this LuaState state, string path, CancellationToken cancellationToken = default)

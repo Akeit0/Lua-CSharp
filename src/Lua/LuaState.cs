@@ -61,7 +61,7 @@ public sealed class LuaState
         envUpValue = UpValue.Closed(environment);
     }
 
-    public async ValueTask<int> RunAsync(Chunk chunk, Memory<LuaValue> buffer, CancellationToken cancellationToken = default)
+    public async ValueTask<LuaResults> RunAsync(Chunk chunk, CancellationToken cancellationToken = default)
     {
         ThrowIfRunning();
 
@@ -69,16 +69,19 @@ public sealed class LuaState
         try
         {
             var closure = new Closure(this, chunk);
-            return await closure.InvokeAsync(new()
+             await closure.InvokeAsync(new()
             {
                 State = this,
                 Thread = CurrentThread,
                 ArgumentCount = 0,
                 FrameBase = 0,
+                ReturnFrameBase = 0,
                 SourcePosition = null,
                 RootChunkName = chunk.Name,
                 ChunkName = chunk.Name,
-            }, buffer, cancellationToken);
+            }, cancellationToken);
+             
+            return new LuaResults(CurrentThread.Stack,0);
         }
         finally
         {

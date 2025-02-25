@@ -15,7 +15,7 @@ public sealed class ModuleLibrary
 
     public readonly LuaFunction RequireFunction;
 
-    public async ValueTask<int> Require(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public async ValueTask Require(LuaFunctionExecutionContext context, CancellationToken cancellationToken)
     {
         var arg0 = context.GetArgument<string>(0);
         var loaded = context.State.LoadedModules;
@@ -25,14 +25,13 @@ public sealed class ModuleLibrary
             var module = await context.State.ModuleLoader.LoadAsync(arg0, cancellationToken);
             var chunk = LuaCompiler.Default.Compile(module.ReadText(), module.Name);
 
-            using var methodBuffer = new PooledArray<LuaValue>(1);
-            await new Closure(context.State, chunk).InvokeAsync(context, methodBuffer.AsMemory(), cancellationToken);
-
-            loadedTable = methodBuffer[0];
+            await new Closure(context.State, chunk).InvokeAsync(context,  cancellationToken);
+            loadedTable = context.GetReturnBuffer(1)[0];
             loaded[arg0] = loadedTable;
+            return;
         }
 
-        buffer.Span[0] = loadedTable;
-        return 1;
+        context.Return(loadedTable);
+        return;
     }
 }

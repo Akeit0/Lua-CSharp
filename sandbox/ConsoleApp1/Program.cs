@@ -27,12 +27,10 @@ try
 
     Console.WriteLine("Output " + new string('-', 50));
 
-    var results = new LuaValue[64];
-    var resultCount = await state.RunAsync(chunk, results);
+    using var results = await state.RunAsync(chunk);
 
     Console.WriteLine("Result " + new string('-', 50));
-
-    for (int i = 0; i < resultCount; i++)
+    for (int i = 0; i < results.Length; i++)
     {
         Console.WriteLine(results[i]);
     }
@@ -42,6 +40,10 @@ try
 catch (Exception ex)
 {
     Console.WriteLine(ex);
+    if (ex is LuaRuntimeException l)
+    {
+        Console.WriteLine(l.LuaTraceback);
+    }
     if(ex is LuaRuntimeException { InnerException: not null } luaEx)
     {
         Console.WriteLine(luaEx.InnerException);

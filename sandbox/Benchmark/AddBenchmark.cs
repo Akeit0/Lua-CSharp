@@ -22,10 +22,10 @@ public class AddBenchmark
         core.Setup("add.lua");
         core.LuaCSharpState.OpenStandardLibraries();
 
-        core.LuaCSharpState.Environment["add"] = new LuaFunction("add", (context, buffer, ct) =>
+        core.LuaCSharpState.Environment["add"] = new LuaFunction("add", (context, ct) =>
         {
-            buffer.Span[0] = context.GetArgument<double>(0) + context.GetArgument<double>(1);
-            return new(1);
+            context.Return(context.GetArgument<double>(0) + context.GetArgument<double>(1)); ;
+            return default;
         });
         core.MoonSharpState.Globals["add"] = (Func<double, double, double>)Add;
         core.NLuaState.RegisterFunction("add", typeof(AddBenchmark).GetMethod(nameof(Add), BindingFlags.Static | BindingFlags.Public));

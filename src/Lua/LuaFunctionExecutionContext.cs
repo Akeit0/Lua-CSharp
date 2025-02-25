@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Lua.CodeAnalysis;
+using Lua.Runtime;
 
 namespace Lua;
 
@@ -11,6 +12,7 @@ public readonly record struct LuaFunctionExecutionContext
     public required LuaThread Thread { get; init; }
     public required int ArgumentCount { get; init; }
     public required int FrameBase { get; init; }
+    public required int ReturnFrameBase { get; init; }
     public SourcePosition? SourcePosition { get; init; }
     public string? RootChunkName { get; init; }
     public string? ChunkName { get; init; }
@@ -19,10 +21,7 @@ public readonly record struct LuaFunctionExecutionContext
 
     public ReadOnlySpan<LuaValue> Arguments
     {
-        get
-        {
-            return Thread.GetStackValues().Slice(FrameBase, ArgumentCount);
-        }
+        get { return Thread.GetStackValues().Slice(FrameBase, ArgumentCount); }
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
@@ -37,7 +36,7 @@ public readonly record struct LuaFunctionExecutionContext
         ThrowIfArgumentNotExists(index);
         return Arguments[index];
     }
-    
+
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal LuaValue GetArgumentOrDefault(int index, LuaValue defaultValue = default)
     {
@@ -45,6 +44,7 @@ public readonly record struct LuaFunctionExecutionContext
         {
             return defaultValue;
         }
+
         return Arguments[index];
     }
 
@@ -75,7 +75,7 @@ public readonly record struct LuaFunctionExecutionContext
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    internal T GetArgumentOrDefault<T>(int index,T defaultValue =default!) 
+    internal T GetArgumentOrDefault<T>(int index, T defaultValue = default!)
     {
         if (ArgumentCount <= index)
         {
@@ -83,12 +83,12 @@ public readonly record struct LuaFunctionExecutionContext
         }
 
         var arg = Arguments[index];
-        
-        if(arg.Type is LuaValueType.Nil)
+
+        if (arg.Type is LuaValueType.Nil)
         {
             return defaultValue;
         }
-        
+
         if (!arg.TryRead<T>(out var argValue))
         {
             var t = typeof(T);
@@ -108,7 +108,7 @@ public readonly record struct LuaFunctionExecutionContext
 
         return argValue;
     }
-    
+
     internal void ThrowBadArgument(int index, string message)
     {
         LuaRuntimeException.BadArgument(State.GetTraceback(), index, Thread.GetCurrentFrame().Function.Name, message);
@@ -120,5 +120,61 @@ public readonly record struct LuaFunctionExecutionContext
         {
             LuaRuntimeException.BadArgument(State.GetTraceback(), index + 1, Thread.GetCurrentFrame().Function.Name);
         }
+    }
+
+    public void Return()
+    {
+        Thread.Stack.PopUntil(ReturnFrameBase);
+    }
+
+    public void Return(LuaValue result)
+    {
+        var stack = Thread.Stack;
+        stack.SetTop(ReturnFrameBase + 1);
+        stack.FastGet(ReturnFrameBase) = result;
+    }
+
+    public void Return(LuaValue result0, LuaValue result1)
+    {
+        var stack = Thread.Stack;
+        stack.SetTop(ReturnFrameBase + 2);
+        stack.FastGet(ReturnFrameBase) = result0;
+        stack.FastGet(ReturnFrameBase + 1) = result1;
+    }
+
+    public void Return(LuaValue result0, LuaValue result1, LuaValue result2)
+    {
+        var stack = Thread.Stack;
+        stack.SetTop(ReturnFrameBase + 3);
+        stack.FastGet(ReturnFrameBase) = result0;
+        stack.FastGet(ReturnFrameBase + 1) = result1;
+        stack.FastGet(ReturnFrameBase + 2) = result2;
+    }
+
+    public void Return(ReadOnlySpan<LuaValue> results)
+    {
+        var stack = Thread.Stack;
+        stack.EnsureCapacity(ReturnFrameBase + results.Length);
+        results.CopyTo(stack.GetBuffer()[ReturnFrameBase..(ReturnFrameBase + results.Length)]);
+        stack.SetTop(ReturnFrameBase + results.Length);
+    }
+
+    public void Return(LuaValue result0, ReadOnlySpan<LuaValue> results)
+    {
+        var stack = Thread.Stack;
+          stack.EnsureCapacity(ReturnFrameBase + results.Length);
+        stack.SetTop(ReturnFrameBase + results.Length+1);
+        var buffer = stack.GetBuffer();
+        buffer[ReturnFrameBase] = result0;
+        results.CopyTo(buffer[(ReturnFrameBase+1)..(ReturnFrameBase + results.Length +1)]);
+        
+    }
+    
+    internal Span<LuaValue> GetReturnBuffer(int count)
+    {
+        var stack = Thread.Stack;
+        stack.SetTop(ReturnFrameBase + count);
+        var buffer = stack.GetBuffer()[ReturnFrameBase..(ReturnFrameBase + count)];
+        return buffer;
     }
 }

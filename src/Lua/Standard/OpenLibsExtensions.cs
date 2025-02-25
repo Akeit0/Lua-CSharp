@@ -21,7 +21,7 @@ public static class OpenLibsExtensions
         {
             bit32[func.Name] = func;
         }
-
+        
         state.Environment["bit32"] = bit32;
         state.LoadedModules["bit32"] = bit32;
     }
@@ -33,7 +33,7 @@ public static class OpenLibsExtensions
         {
             coroutine[func.Name] = func;
         }
-
+        
         state.Environment["coroutine"] = coroutine;
     }
 
@@ -44,11 +44,11 @@ public static class OpenLibsExtensions
         {
             io[func.Name] = func;
         }
-
+        
         io["stdio"] = new LuaValue(new FileHandle(Console.OpenStandardInput()));
         io["stdout"] = new LuaValue(new FileHandle(Console.OpenStandardOutput()));
         io["stderr"] = new LuaValue(new FileHandle(Console.OpenStandardError()));
-
+        
         state.Environment["io"] = io;
         state.LoadedModules["io"] = io;
     }
@@ -56,16 +56,16 @@ public static class OpenLibsExtensions
     public static void OpenMathLibrary(this LuaState state)
     {
         state.Environment[MathematicsLibrary.RandomInstanceKey] = new(new MathematicsLibrary.RandomUserData(new Random()));
-
+        
         var math = new LuaTable(0, MathematicsLibrary.Instance.Functions.Length);
         foreach (var func in MathematicsLibrary.Instance.Functions)
         {
             math[func.Name] = func;
         }
-
+        
         math["pi"] = Math.PI;
         math["huge"] = double.PositiveInfinity;
-
+        
         state.Environment["math"] = math;
         state.LoadedModules["math"] = math;
     }
@@ -85,7 +85,7 @@ public static class OpenLibsExtensions
         {
             os[func.Name] = func;
         }
-
+        
         state.Environment["os"] = os;
         state.LoadedModules["os"] = os;
     }
@@ -97,10 +97,10 @@ public static class OpenLibsExtensions
         {
             @string[func.Name] = func;
         }
-
+        
         state.Environment["string"] = @string;
         state.LoadedModules["string"] = @string;
-
+        
         // set __index
         var key = new LuaValue("");
         if (!state.TryGetMetatable(key, out var metatable))
@@ -108,14 +108,14 @@ public static class OpenLibsExtensions
             metatable = new();
             state.SetMetatable(key, metatable);
         }
-
-        metatable[Metamethods.Index] = new LuaFunction("index", (context, buffer, cancellationToken) =>
+        
+        metatable[Metamethods.Index] = new LuaFunction("index", (context, cancellationToken) =>
         {
             context.GetArgument<string>(0);
             var key = context.GetArgument(1);
-
-            buffer.Span[0] = @string[key];
-            return new(1);
+        
+            context.Return(@string[key]);
+            return default;
         });
     }
 
@@ -126,7 +126,7 @@ public static class OpenLibsExtensions
         {
             table[func.Name] = func;
         }
-
+        
         state.Environment["table"] = table;
         state.LoadedModules["table"] = table;
     }
@@ -138,7 +138,7 @@ public static class OpenLibsExtensions
         {
             debug[func.Name] = func;
         }
-
+        
         state.Environment["debug"] = debug;
         state.LoadedModules["debug"] = debug;
     }

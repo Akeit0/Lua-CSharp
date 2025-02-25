@@ -5,14 +5,14 @@ namespace Lua.Standard.Internal;
 
 internal static class IOHelper
 {
-    public static int Open(LuaState state, string fileName, string mode, Memory<LuaValue> buffer, bool throwError)
+    public static FileHandle? Open(LuaFunctionExecutionContext context, string fileName, string mode, bool throwError)
     {
         var fileMode = mode switch
         {
             "r" or "rb" or "r+" or "r+b" => FileMode.Open,
             "w" or "wb" or "w+" or "w+b" => FileMode.Create,
             "a" or "ab" or "a+" or "a+b" => FileMode.Append,
-            _ => throw new LuaRuntimeException(state.GetTraceback(), "bad argument #2 to 'open' (invalid mode)"),
+            _ => throw new LuaRuntimeException(context.State.GetTraceback(), "bad argument #2 to 'open' (invalid mode)"),
         };
 
         var fileAccess = mode switch
@@ -25,8 +25,9 @@ internal static class IOHelper
         try
         {
             var stream = File.Open(fileName, fileMode, fileAccess);
-            buffer.Span[0] = new LuaValue(new FileHandle(stream));
-            return 1;
+            var fileHandle = new FileHandle(stream);
+            context.Return(new LuaValue(fileHandle));
+            return fileHandle;
         }
         catch (IOException ex)
         {
@@ -35,16 +36,14 @@ internal static class IOHelper
                 throw;
             }
 
-            buffer.Span[0] = LuaValue.Nil;
-            buffer.Span[1] = ex.Message;
-            buffer.Span[2] = ex.HResult;
-            return 3;
+            context.Return(LuaValue.Nil, ex.Message, ex.HResult);
+            return null;
         }
     }
 
     // TODO: optimize (use IBuffertWrite<byte>, async)
 
-    public static int Write(FileHandle file, string name, LuaFunctionExecutionContext context, Memory<LuaValue> buffer)
+    public static void Write(FileHandle file, string name, LuaFunctionExecutionContext context)
     {
         try
         {
@@ -70,19 +69,16 @@ internal static class IOHelper
         }
         catch (IOException ex)
         {
-            buffer.Span[0] = LuaValue.Nil;
-            buffer.Span[1] = ex.Message;
-            buffer.Span[2] = ex.HResult;
-            return 3;
+            context.Return(LuaValue.Nil, ex.Message, ex.HResult);
+            return;
         }
 
-        buffer.Span[0] = new(file);
-        return 1;
+        context.Return(new LuaValue(file));
     }
 
     static readonly LuaValue[] defaultReadFormat = ["*l"];
 
-    public static int Read(LuaState state, FileHandle file, string name, int startArgumentIndex, ReadOnlySpan<LuaValue> formats, Memory<LuaValue> buffer, bool throwError)
+    public static bool Read(LuaFunctionExecutionContext context, FileHandle file, string name, int startArgumentIndex, ReadOnlySpan<LuaValue> formats, bool throwError)
     {
         if (formats.Length == 0)
         {
@@ -91,6 +87,7 @@ internal static class IOHelper
 
         try
         {
+            var buffer = context.GetReturnBuffer(formats.Length);
             for (int i = 0; i < formats.Length; i++)
             {
                 var format = formats[i];
@@ -104,16 +101,16 @@ internal static class IOHelper
                             throw new NotImplementedException();
                         case "*a":
                         case "*all":
-                            buffer.Span[i] = file.ReadToEnd();
+                            buffer[i] = file.ReadToEnd();
                             break;
                         case "*l":
                         case "*line":
-                            buffer.Span[i] = file.ReadLine() ?? LuaValue.Nil;
+                            buffer[i] = file.ReadLine() ?? LuaValue.Nil;
                             break;
                         case "L":
                         case "*L":
                             var text = file.ReadLine();
-                            buffer.Span[i] = text == null ? LuaValue.Nil : text + Environment.NewLine;
+                            buffer[i] = text == null ? LuaValue.Nil : text + Environment.NewLine;
                             break;
                     }
                 }
@@ -126,22 +123,22 @@ internal static class IOHelper
                         var b = file.ReadByte();
                         if (b == -1)
                         {
-                            buffer.Span[0] = LuaValue.Nil;
-                            return 1;
+                            context.Return(LuaValue.Nil);
+                            return false;
                         }
 
                         byteBuffer[j] = (byte)b;
                     }
 
-                    buffer.Span[i] = Encoding.UTF8.GetString(byteBuffer.AsSpan());
+                    buffer[i] = Encoding.UTF8.GetString(byteBuffer.AsSpan());
                 }
                 else
                 {
-                    LuaRuntimeException.BadArgument(state.GetTraceback(), i + 1, name);
+                    LuaRuntimeException.BadArgument(context.State.GetTraceback(), i + 1, name);
                 }
             }
 
-            return formats.Length;
+            return true;
         }
         catch (IOException ex)
         {
@@ -150,10 +147,8 @@ internal static class IOHelper
                 throw;
             }
 
-            buffer.Span[0] = LuaValue.Nil;
-            buffer.Span[1] = ex.Message;
-            buffer.Span[2] = ex.HResult;
-            return 3;
+            context.Return(LuaValue.Nil, ex.Message, ex.HResult);
+            return false;
         }
     }
 }

@@ -201,7 +201,7 @@ partial class LuaObjectGenerator
 
     static bool TryEmitIndexMetamethod(TypeMetadata typeMetadata, CodeBuilder builder, in SourceProductionContext context)
     {
-        builder.AppendLine(@"static readonly global::Lua.LuaFunction __metamethod_index = new global::Lua.LuaFunction(""index"", (context, buffer, ct) =>");
+        builder.AppendLine(@"static readonly global::Lua.LuaFunction __metamethod_index = new global::Lua.LuaFunction(""index"", (context, ct) =>");
 
         using (builder.BeginBlockScope())
         {
@@ -233,8 +233,8 @@ partial class LuaObjectGenerator
             }
             builder.AppendLine(";");
 
-            builder.AppendLine("buffer.Span[0] = result;");
-            builder.AppendLine("return new(1);");
+            builder.AppendLine("context.Return(result);");
+            builder.AppendLine("return default;");
         }
 
         builder.AppendLine(");");
@@ -244,7 +244,7 @@ partial class LuaObjectGenerator
 
     static bool TryEmitNewIndexMetamethod(TypeMetadata typeMetadata, CodeBuilder builder, in SourceProductionContext context)
     {
-        builder.AppendLine(@"static readonly global::Lua.LuaFunction __metamethod_newindex = new global::Lua.LuaFunction(""newindex"", (context, buffer, ct) =>");
+        builder.AppendLine(@"static readonly global::Lua.LuaFunction __metamethod_newindex = new global::Lua.LuaFunction(""newindex"", (context, ct) =>");
 
         using (builder.BeginBlockScope())
         {
@@ -295,8 +295,8 @@ partial class LuaObjectGenerator
                     builder.AppendLine(@$"throw new global::Lua.LuaRuntimeException(context.State.GetTraceback(), $""'{{key}}' not found."");");
                 }
             }
-
-            builder.AppendLine("return new(0);");
+            builder.AppendLine("context.Return();");
+            builder.AppendLine("return default;");
         }
 
         builder.AppendLine(");");
@@ -348,7 +348,7 @@ partial class LuaObjectGenerator
 
     static void EmitMethodFunction(string functionName, string chunkName, TypeMetadata typeMetadata, MethodMetadata methodMetadata, CodeBuilder builder, SymbolReferences references)
     {
-        builder.AppendLine($@"static readonly global::Lua.LuaFunction {functionName} = new global::Lua.LuaFunction(""{chunkName}"", {(methodMetadata.IsAsync ? "async" : "")} (context, buffer, ct) =>");
+        builder.AppendLine($@"static readonly global::Lua.LuaFunction {functionName} = new global::Lua.LuaFunction(""{chunkName}"", {(methodMetadata.IsAsync ? "async" : "")} (context, ct) =>");
 
         using (builder.BeginBlockScope())
         {
@@ -418,18 +418,19 @@ partial class LuaObjectGenerator
             {
                 if (SymbolEqualityComparer.Default.Equals(methodMetadata.Symbol.ReturnType, references.LuaValue))
                 {
-                    builder.AppendLine("buffer.Span[0] = result;");
+                    builder.AppendLine("context.Return(result);");
                 }
                 else
                 {
-                    builder.AppendLine("buffer.Span[0] = new global::Lua.LuaValue(result);");
+                    builder.AppendLine("context.Return(new global::Lua.LuaValue(result));");
                 }
 
-                builder.AppendLine($"return {(methodMetadata.IsAsync ? "1" : "new(1)")};");
+                builder.AppendLine($"return {(methodMetadata.IsAsync ? "" : "default")};");
             }
             else
             {
-                builder.AppendLine($"return {(methodMetadata.IsAsync ? "0" : "new(0)")};");
+                builder.AppendLine("context.Return();");
+                builder.AppendLine($"return {(methodMetadata.IsAsync ? "" : "default")};");
             }
         }
         builder.AppendLine(");");

@@ -28,7 +28,7 @@ public sealed class StringLibrary
 
     public readonly LuaFunction[] Functions;
 
-    public ValueTask<int> Byte(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Byte(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
         var i = context.HasArgument(1)
@@ -42,20 +42,21 @@ public sealed class StringLibrary
         LuaRuntimeException.ThrowBadArgumentIfNumberIsNotInteger(context.State, "byte", 3, j);
 
         var span = StringHelper.Slice(s, (int)i, (int)j);
+        var resultsBuffer = context.GetReturnBuffer(span.Length);
         for (int k = 0; k < span.Length; k++)
         {
-            buffer.Span[k] = span[k];
+            resultsBuffer[k] = span[k];
         }
 
-        return new(span.Length);
+        return default;
     }
 
-    public ValueTask<int> Char(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Char(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         if (context.ArgumentCount == 0)
         {
-            buffer.Span[0] = "";
-            return new(1);
+            context.Return("");
+            return default;
         }
 
         var builder = new ValueStringBuilder(context.ArgumentCount);
@@ -66,17 +67,17 @@ public sealed class StringLibrary
             builder.Append((char)arg);
         }
 
-        buffer.Span[0] = builder.ToString();
-        return new(1);
+        context.Return(builder.ToString());
+        return default;
     }
 
-    public ValueTask<int> Dump(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Dump(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         // stirng.dump is not supported (throw exception)
         throw new NotSupportedException("stirng.dump is not supported");
     }
 
-    public ValueTask<int> Find(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Find(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
         var pattern = context.GetArgument<string>(1);
@@ -98,16 +99,15 @@ public sealed class StringLibrary
         // out of range
         if (init != 1 && (init < 1 || init > s.Length))
         {
-            buffer.Span[0] = LuaValue.Nil;
-            return new(1);
+            context.Return(LuaValue.Nil);
+            return default;
         }
 
         // empty pattern
         if (pattern.Length == 0)
         {
-            buffer.Span[0] = 1;
-            buffer.Span[1] = 1;
-            return new(2);
+            context.Return(1,1);
+            return default;
         }
 
         var source = s.AsSpan()[(int)(init - 1)..];
@@ -117,14 +117,13 @@ public sealed class StringLibrary
             var start = source.IndexOf(pattern);
             if (start == -1)
             {
-                buffer.Span[0] = LuaValue.Nil;
-                return new(1);
+                context.Return(LuaValue.Nil);
+                return default;
             }
 
             // 1-based
-            buffer.Span[0] = start + 1;
-            buffer.Span[1] = start + pattern.Length;
-            return new(2);
+            context.Return(start + 1, start + pattern.Length);
+            return default;
         }
         else
         {
@@ -134,19 +133,18 @@ public sealed class StringLibrary
             if (match.Success)
             {
                 // 1-based
-                buffer.Span[0] = init + match.Index;
-                buffer.Span[1] = init + match.Index + match.Length - 1;
-                return new(2);
+                context.Return(init + match.Index,init + match.Index + match.Length - 1);
+                return default;
             }
             else
             {
-                buffer.Span[0] = LuaValue.Nil;
-                return new(1);
+                context.Return(LuaValue.Nil);
+                return default;
             }
         }
     }
 
-    public async ValueTask<int> Format(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public async ValueTask Format(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var format = context.GetArgument<string>(0);
 
@@ -283,10 +281,10 @@ public sealed class StringLibrary
                         }
                         break;
                     case 's':
-                        using (var strBuffer = new PooledArray<LuaValue>(1))
+                       
                         {
-                            await parameter.CallToStringAsync(context, strBuffer.AsMemory(), cancellationToken);
-                            formattedValue = strBuffer[0].Read<string>();
+                            await parameter.CallToStringAsync(context,  cancellationToken);
+                            formattedValue = context.Thread.Stack.Pop().Read<string>();
                         }
 
                         if (specifier is 's' && precision > 0 && precision <= formattedValue.Length)
@@ -311,10 +309,11 @@ public sealed class StringLibrary
                                 formattedValue = parameter.Read<double>().ToString();
                                 break;
                             default:
-                                using (var strBuffer = new PooledArray<LuaValue>(1))
+                                
                                 {
-                                    await parameter.CallToStringAsync(context, strBuffer.AsMemory(), cancellationToken);
-                                    formattedValue = strBuffer[0].Read<string>();
+                                    await parameter.CallToStringAsync(context,  cancellationToken);
+                                    
+                                    formattedValue = context.Thread.Stack.Pop().Read<string>();
                                 }
                                 break;
                         }
@@ -418,11 +417,11 @@ public sealed class StringLibrary
         }
 
 
-        buffer.Span[0] = builder.ToString();
-        return 1;
+        context.Return(builder.ToString());
+        return ;
     }
 
-    public ValueTask<int> GMatch(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask GMatch(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
         var pattern = context.GetArgument<string>(1);
@@ -431,7 +430,7 @@ public sealed class StringLibrary
         var matches = regex.Matches(s);
         var i = 0;
 
-        buffer.Span[0] = new LuaFunction("iterator", (context, buffer, cancellationToken) =>
+        context.Return(new LuaFunction("iterator", (context, cancellationToken) =>
         {
             if (matches.Count > i)
             {
@@ -442,29 +441,30 @@ public sealed class StringLibrary
 
                 if (groups.Count == 1)
                 {
-                    buffer.Span[0] = match.Value;
+                    context.Return(match.Value);
                 }
                 else
                 {
+                    var resultsBuffer = context.GetReturnBuffer(groups.Count );
                     for (int j = 0; j < groups.Count; j++)
                     {
-                        buffer.Span[j] = groups[j + 1].Value;
+                        resultsBuffer[j] = groups[j + 1].Value;
                     }
                 }
 
-                return new(groups.Count);
+                return default;
             }
             else
             {
-                buffer.Span[0] = LuaValue.Nil;
-                return new(1);
+                context.Return(LuaValue.Nil);
+                return default;
             }
-        });
+        }));
 
-        return new(1);
+        return default;
     }
 
-    public async ValueTask<int> GSub(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public async ValueTask GSub(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
         var pattern = context.GetArgument<string>(1);
@@ -516,14 +516,13 @@ public sealed class StringLibrary
                     context.State.Push(match.Groups[k].Value);
                 }
 
-                using var methodBuffer = new PooledArray<LuaValue>(1024);
                 await func.InvokeAsync(context with
                 {
                     ArgumentCount = match.Groups.Count,
                     FrameBase = context.Thread.Stack.Count - context.ArgumentCount,
-                }, methodBuffer.AsMemory(), cancellationToken);
+                },  cancellationToken);
 
-                result = methodBuffer[0];
+                result = context.GetReturnBuffer(1)[0];
             }
             else
             {
@@ -553,25 +552,25 @@ public sealed class StringLibrary
 
         builder.Append(s.AsSpan()[lastIndex..s.Length]);
 
-        buffer.Span[0] = builder.ToString();
-        return 1;
+        context.Return(builder.ToString());
+        return;
     }
 
-    public ValueTask<int> Len(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Len(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
-        buffer.Span[0] = s.Length;
-        return new(1);
+        context.Return(s.Length);
+        return default;
     }
 
-    public ValueTask<int> Lower(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Lower(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
-        buffer.Span[0] = s.ToLower();
-        return new(1);
+        context.Return(s.ToLower());
+        return default;
     }
 
-    public ValueTask<int> Rep(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Rep(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
         var n_arg = context.GetArgument<double>(1);
@@ -593,22 +592,22 @@ public sealed class StringLibrary
             }
         }
 
-        buffer.Span[0] = builder.ToString();
-        return new(1);
+        context.Return(builder.ToString());
+        return default;
     }
 
-    public ValueTask<int> Reverse(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Reverse(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
         using var strBuffer = new PooledArray<char>(s.Length);
         var span = strBuffer.AsSpan()[..s.Length];
         s.AsSpan().CopyTo(span);
         span.Reverse();
-        buffer.Span[0] = span.ToString();
-        return new(1);
+        context.Return(span.ToString());
+        return default;
     }
 
-    public ValueTask<int> Sub(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Sub(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
         var i = context.GetArgument<double>(1);
@@ -619,14 +618,14 @@ public sealed class StringLibrary
         LuaRuntimeException.ThrowBadArgumentIfNumberIsNotInteger(context.State, "sub", 2, i);
         LuaRuntimeException.ThrowBadArgumentIfNumberIsNotInteger(context.State, "sub", 3, j);
 
-        buffer.Span[0] = StringHelper.Slice(s, (int)i, (int)j).ToString();
-        return new(1);
+        context.Return(StringHelper.Slice(s, (int)i, (int)j).ToString());
+        return default;
     }
 
-    public ValueTask<int> Upper(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public ValueTask Upper(LuaFunctionExecutionContext context,  CancellationToken cancellationToken)
     {
         var s = context.GetArgument<string>(0);
-        buffer.Span[0] = s.ToUpper();
-        return new(1);
+        context.Return(s.ToUpper());
+        return default;
     }
 }

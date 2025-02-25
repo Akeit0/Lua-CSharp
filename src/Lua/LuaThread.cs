@@ -8,8 +8,8 @@ public abstract class LuaThread
 {
     public abstract LuaThreadStatus GetStatus();
     public abstract void UnsafeSetStatus(LuaThreadStatus status);
-    public abstract ValueTask<int> ResumeAsync(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken = default);
-    public abstract ValueTask<int> YieldAsync(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken = default);
+    public abstract ValueTask ResumeAsync(LuaFunctionExecutionContext context,CancellationToken cancellationToken = default);
+    public abstract ValueTask YieldAsync(LuaFunctionExecutionContext context, CancellationToken cancellationToken = default);
 
     LuaStack stack = new();
     FastStackCore<CallStackFrame> callStack;
@@ -43,7 +43,7 @@ public abstract class LuaThread
     {
         if (callStack.TryPop(out var frame))
         {
-            stack.PopUntil(frame.Base);
+            //stack.PopUntil(frame.Base);
         }
         else
         {
