@@ -17,6 +17,47 @@ public abstract class LuaThread
     internal LuaStack Stack => stack;
     internal ref FastStackCore<CallStackFrame> CallStack => ref callStack;
 
+    internal bool IsLineHookEnabled
+    {
+        get => (LineAndCountHookMask & 1) != 0;
+        set
+        {
+            if (value)
+            {
+                LineAndCountHookMask |= 1;
+            }
+            else
+            {
+                LineAndCountHookMask &= 0b1111_1110;
+            }
+        }
+    }
+
+    internal bool IsCountHookEnabled
+    {
+        get => (LineAndCountHookMask & 2) != 0;
+        set
+        {
+            if (value)
+            {
+                LineAndCountHookMask |= 2;
+            }
+            else
+            {
+                LineAndCountHookMask &= 0b1111_1101;
+            }
+        }
+    }
+    internal bool IsCallHookEnabled;
+    internal byte LineAndCountHookMask;
+    internal bool IsReturnHookEnabled;
+    internal bool CallOrReturnHookEnabled => IsCallHookEnabled || IsReturnHookEnabled;
+    internal bool IsInHook;
+    internal int HookCount;
+    internal int BaseHookCount;
+    internal int LastPc;
+    internal LuaFunction? Hook { get; set; }
+
     public CallStackFrame GetCurrentFrame()
     {
         return callStack.Peek();
@@ -81,6 +122,6 @@ public abstract class LuaThread
             Console.WriteLine($"LuaStack [{i}]\t{span[i]}");
         }
     }
-    
+
     static void ThrowForEmptyStack() => throw new InvalidOperationException("Empty stack");
 }

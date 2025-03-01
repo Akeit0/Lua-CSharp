@@ -106,7 +106,7 @@ public sealed class BasicLibrary
             ? "(error object is a nil value)"
             : context.Arguments[0];
 
-        throw new LuaRuntimeException(context.State.GetTraceback(), value);
+        throw new LuaRuntimeException(context.State.GetTraceback(context.Thread), value);
     }
 
     public ValueTask<int> GetMetatable(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
@@ -201,6 +201,10 @@ public sealed class BasicLibrary
             if (arg0.TryRead<string>(out var str))
             {
                 var chunk = LuaCompiler.Default.Compile(str, arg1 ?? str);
+               //Console.WriteLine(str);
+                
+              //  Console.WriteLine(string.Join("\n ", chunk.Instructions.Zip(chunk.SourcePositions, (i, p) => $"{i} {p}")));
+              //    Console.WriteLine(string.Join("\n ", chunk.Locals.Select(l => $"{l.Name} [{l.Index}] {l.StartPc}..{l.EndPc}")));
                 buffer.Span[0] = new Closure(context.State, chunk, arg3);
                 return new(1);
             }

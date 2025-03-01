@@ -436,6 +436,8 @@ public class FunctionCompilationContext : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public Chunk ToChunk()
     {
+        if(0<instructionPositions.Length)
+            LastLineDefined = Math.Max(LastLineDefined, instructionPositions[^1].Line);
         // add return
         instructions.Add(Instruction.Return(0, 1));
         instructionPositions.Add( new (LastLineDefined, 0));
@@ -467,7 +469,7 @@ public class FunctionCompilationContext : IDisposable
     }
 
     /// <summary>
-    /// Resets the values ​​held in the context.
+    /// Resets the values held in the context.
     /// </summary>
     public void Reset()
     {
@@ -487,6 +489,7 @@ public class FunctionCompilationContext : IDisposable
         ParameterCount = 0;
         HasVariableArguments = false;
         MaxStackPosition = 0;
+        LastLineDefined = -1;
     }
 
     /// <summary>

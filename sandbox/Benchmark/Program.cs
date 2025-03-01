@@ -12,8 +12,8 @@ class BenchmarkConfig : ManualConfig
     {
         AddDiagnoser(MemoryDiagnoser.Default);
         AddJob(Job.ShortRun
-            .WithWarmupCount(10)
-            .WithIterationCount(10)
+            .WithWarmupCount(30)
+            .WithIterationCount(30)
         );
     }
 }

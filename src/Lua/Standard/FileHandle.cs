@@ -178,9 +178,12 @@ public class FileHandle : ILuaUserData
 
         LuaValue[] formats = [format];
 
-        buffer.Span[0] = new LuaFunction("iterator", (context, buffer, cancellationToken) =>
+        buffer.Span[0] = new CsClosure("iterator",[new (file),new (formats)], static (context, buffer, cancellationToken) =>
         {
-            var resultCount = IOHelper.Read(context.State, file, "lines", 0, formats, buffer, true);
+            var upValues = context.GetCsClosure()!.UpValues;
+            var file =upValues[0].UnsafeRead<FileHandle>();
+            var format = upValues[1].UnsafeRead<LuaValue[]>();
+            var resultCount = IOHelper.Read(context.State, file, "lines", 0, format, buffer, true);
             return new(resultCount);
         });
 

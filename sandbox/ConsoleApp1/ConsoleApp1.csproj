@@ -8,6 +8,10 @@
 		</ProjectReference>
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="NLua" Version="1.7.4" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>Exe</OutputType>
     <TargetFramework>net8.0</TargetFramework>

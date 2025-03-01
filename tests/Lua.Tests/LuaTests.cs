@@ -1,3 +1,5 @@
+using Lua.CodeAnalysis.Compilation;
+using Lua.CodeAnalysis.Syntax;
 using Lua.Standard;
 
 namespace Lua.Tests;
@@ -58,7 +60,20 @@ public class LuaTests
     [Test]
     public async Task Test_Debug_Mini()
     {
-        await state.DoFileAsync(FileHelper.GetAbsolutePath("tests-lua/db_mini.lua"));
+        var source = File.ReadAllText(FileHelper.GetAbsolutePath("tests-lua/db_mini.lua"));
+
+        var syntaxTree = LuaSyntaxTree.Parse(source, "@db.lua");
+
+        var chunk = LuaCompiler.Default.Compile(syntaxTree, "@db.lua");
+        try
+        {
+            await state.RunAsync(chunk, new LuaValue[64]);
+        }
+        catch (LuaRuntimeException e)
+        {
+            Console.WriteLine(e.LuaTraceback);
+            throw;
+        }
     }
 
     [Test]

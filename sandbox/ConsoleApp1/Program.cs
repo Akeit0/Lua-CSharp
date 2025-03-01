@@ -4,12 +4,19 @@ using Lua.CodeAnalysis.Compilation;
 using Lua.Runtime;
 using Lua;
 using Lua.Standard;
+using NLua.Exceptions;
 
 var state = LuaState.Create();
 state.OpenStandardLibraries();
 
 state.Environment["vec3"] = new LVec3();
 
+state.Environment["wait"] = new LuaFunction("wait",  (async(context, memory, ct) =>
+{
+
+   await Task.Delay(context.GetArgument<int>(0));
+    return 0;
+}));
 try
 {
     var source = File.ReadAllText(GetAbsolutePath("test.lua"));
@@ -21,7 +28,7 @@ try
     var debugger = new DisplayStringSyntaxVisitor();
     Console.WriteLine(debugger.GetDisplayString(syntaxTree));
 
-    var chunk = LuaCompiler.Default.Compile(syntaxTree, "test.lua");
+    var chunk = LuaCompiler.Default.Compile(syntaxTree, "@test.lua");
 
     DebugChunk(chunk, 0);
 
@@ -38,10 +45,37 @@ try
     }
 
     Console.WriteLine("End " + new string('-', 50));
+
+    using var nlua = new NLua.Lua();
+    try
+    {
+        nlua.DoString(source);
+    }
+    catch (Exception e)
+    {
+
+        Console.WriteLine(e);
+        if (e is LuaScriptException le)
+        {
+            
+            foreach (var VARIABLE in le.Data.Values)
+            {
+                Console.WriteLine(VARIABLE);
+            }
+            
+        }
+       
+        throw;
+    }
+    
 }
 catch (Exception ex)
 {
     Console.WriteLine(ex);
+    if (ex is LuaRuntimeException l)
+    {
+        Console.WriteLine(l.LuaTraceback);
+    }
     if(ex is LuaRuntimeException { InnerException: not null } luaEx)
     {
         Console.WriteLine(luaEx.InnerException);

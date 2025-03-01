@@ -1,6 +1,7 @@
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using Lua.CodeAnalysis;
+using Lua.Runtime;
 
 namespace Lua;
 
@@ -115,6 +116,12 @@ public readonly record struct LuaFunctionExecutionContext
         }
 
         return argValue;
+    }
+
+    internal CsClosure? GetCsClosure()
+    {
+        var stack = Thread.CallStack[^1];
+        return stack.Function as CsClosure;
     }
     
     internal void ThrowBadArgument(int index, string message)
