@@ -760,10 +760,10 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
         // if
         using (var scopeContext = context.CreateChildScope())
         {
-            CompileConditionNode(node.IfNode.ConditionNode, scopeContext, true, node.Position);
+            CompileConditionNode(node.IfNode.ConditionNode, scopeContext, true, node.IfNode.Position);
 
             var ifPosition = scopeContext.Function.Instructions.Length;
-            scopeContext.PushInstruction(Instruction.Jmp(0, 0), node.Position);
+            scopeContext.PushInstruction(Instruction.Jmp(0, 0), node.IfNode.Position);
 
             foreach (var childNode in node.IfNode.ThenNodes)
             {
@@ -792,7 +792,7 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
             CompileConditionNode(elseIf.ConditionNode, scopeContext, true);
 
             var elseifPosition = scopeContext.Function.Instructions.Length;
-            scopeContext.PushInstruction(Instruction.Jmp(0, 0), node.Position);
+            scopeContext.PushInstruction(Instruction.Jmp(0, 0), elseIf.Position);
 
             foreach (var childNode in elseIf.ThenNodes)
             {
@@ -804,11 +804,11 @@ public sealed class LuaCompiler : ISyntaxNodeVisitor<ScopeCompilationContext, bo
             if (hasElse)
             {
                 endJumpIndexList.Add(scopeContext.Function.Instructions.Length);
-                scopeContext.PushInstruction(Instruction.Jmp(stackPositionToClose, 0), node.Position);
+                scopeContext.PushInstruction(Instruction.Jmp(stackPositionToClose, 0), elseIf.Position);
             }
             else
             {
-                scopeContext.TryPushCloseUpValue(stackPositionToClose, node.Position);
+                scopeContext.TryPushCloseUpValue(stackPositionToClose, elseIf.Position);
             }
 
             scopeContext.Function.Instructions[elseifPosition].SBx = scopeContext.Function.Instructions.Length - 1 - elseifPosition;

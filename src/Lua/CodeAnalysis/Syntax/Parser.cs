@@ -295,6 +295,7 @@ public ref struct Parser
                     case 0:
                         ifNodes = new()
                         {
+                            Position = thenToken.Position,
                             ConditionNode = condition,
                             ThenNodes = builder.AsSpan().ToArray(),
                         };
@@ -303,6 +304,7 @@ public ref struct Parser
                     case 1:
                         elseIfBuilder.Add(new()
                         {
+                            Position = thenToken.Position,
                             ConditionNode = condition,
                             ThenNodes = builder.AsSpan().ToArray(),
                         });
@@ -326,7 +328,7 @@ public ref struct Parser
 
                     // check 'then' keyword
                     CheckCurrent(ref enumerator, SyntaxTokenType.Then);
-
+                    thenToken = enumerator.Current;
                     // set elseif state
                     state = 1;
 
@@ -350,7 +352,7 @@ public ref struct Parser
         }
 
     RETURN:
-        return new IfStatementNode(ifNodes, elseIfBuilder.AsSpan().ToArray(), elseNodes, thenToken.Position);
+        return new IfStatementNode(ifNodes, elseIfBuilder.AsSpan().ToArray(), elseNodes, ifToken.Position);
     }
 
     WhileStatementNode ParseWhileStatement(ref SyntaxTokenEnumerator enumerator)
