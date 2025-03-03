@@ -16,7 +16,8 @@ public record struct CallStackFrame
 [Flags]
 public enum CallStackFrameFlags
 {
-    ReversedLe = 1,
-    TailCall,
-    InHook,
+    //None = 0,
+    ReversedLe  = 1,
+    TailCall = 2,
+    InHook = 4,
 }

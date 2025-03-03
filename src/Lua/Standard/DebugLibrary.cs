@@ -365,6 +365,7 @@ public class DebugLibrary
             buffer.Span[0] = "stack traceback:";
             return new(1);
         }
+
         var skipCount = Math.Min(Math.Max(level - 1, 0), callStack.Length - 1);
         var frames = callStack[1..^skipCount];
         buffer.Span[0] = Runtime.Traceback.GetTracebackString(context.State, (Closure)callStack[0].Function, frames, message, level == 1);
@@ -428,7 +429,7 @@ public class DebugLibrary
         return new(0);
     }
 
-    public ValueTask<int> SetHook(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
+    public async ValueTask<int> SetHook(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
     {
         var thread = GetLuaThread(context, out var argOffset);
         LuaFunction? hook = context.GetArgumentOrDefault<LuaFunction?>(argOffset);
@@ -441,7 +442,7 @@ public class DebugLibrary
             thread.IsLineHookEnabled = false;
             thread.IsCallHookEnabled = false;
             thread.IsReturnHookEnabled = false;
-            return new(0);
+            return 0;
         }
 
         var mask = context.GetArgument<string>(argOffset + 1);
@@ -454,8 +455,6 @@ public class DebugLibrary
             {
                 thread.IsCountHookEnabled = true;
             }
-
-            ;
         }
         else
         {
@@ -474,7 +473,40 @@ public class DebugLibrary
         }
 
         thread.Hook = hook;
-        return new(0);
+        if (thread.IsReturnHookEnabled && context.Thread == thread)
+        {
+            var stack = thread.Stack;
+            stack.Push("return");
+            stack.Push(LuaValue.Nil);
+            var funcContext = new LuaFunctionExecutionContext
+            {
+                State = context.State,
+                Thread = context.Thread,
+                ArgumentCount = 2,
+                FrameBase = stack.Count - 2,
+            };
+            var frame = new CallStackFrame
+            {
+                Base = funcContext.FrameBase,
+                VariableArgumentCount = hook.GetVariableArgumentCount(2),
+                Function = hook,
+            };
+            frame.Flags |= CallStackFrameFlags.InHook;
+            thread.PushCallStackFrame(frame);
+            try
+            {
+                thread.IsInHook = true;
+                await hook.Func(funcContext, Memory<LuaValue>.Empty, cancellationToken);
+            }
+            finally
+            {
+                thread.IsInHook = false;
+            }
+
+            thread.PopCallStackFrame();
+        }
+
+        return 0;
     }
 
 
@@ -518,20 +550,22 @@ public class DebugLibrary
             var level = context.GetArgument<int>(argOffset) + 1;
 
             var callStack = thread.GetCallStackFrames();
+
             if (level <= 0 || level > callStack.Length)
             {
-                //context.ThrowBadArgument(1, "level out of range");
                 buffer.Span[0] = LuaValue.Nil;
                 return new(1);
             }
 
+
             currentFrame = thread.GetCallStackFrames()[^(level)];
-            functionToInspect = currentFrame.Value.Function;
             previousFrame = level + 1 <= callStack.Length ? callStack[^(level + 1)] : null;
             if (level != 1)
             {
                 pc = thread.GetCallStackFrames()[^(level - 1)].CallerInstructionIndex;
             }
+
+            functionToInspect = currentFrame.Value.Function;
         }
         else
         {

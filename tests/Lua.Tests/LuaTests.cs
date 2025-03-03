@@ -60,14 +60,9 @@ public class LuaTests
     [Test]
     public async Task Test_Debug_Mini()
     {
-        var source = File.ReadAllText(FileHelper.GetAbsolutePath("tests-lua/db_mini.lua"));
-
-        var syntaxTree = LuaSyntaxTree.Parse(source, "@db.lua");
-
-        var chunk = LuaCompiler.Default.Compile(syntaxTree, "@db.lua");
         try
         {
-            await state.RunAsync(chunk, new LuaValue[64]);
+            await state.DoFileAsync((FileHelper.GetAbsolutePath("tests-lua/db.lua")));
         }
         catch (LuaRuntimeException e)
         {

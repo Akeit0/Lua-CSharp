@@ -128,12 +128,12 @@ internal readonly struct LuaDebug : IDisposable
     {
         if (!state.DebugBufferPool.TryPop(out var buffer))
         {
-            buffer = new (state);
+            buffer = new(state);
         }
 
         isValid = buffer.GetInfo(prevFrame, frame, function, pc, what);
 
-        return new (buffer, buffer.version);
+        return new(buffer, buffer.version);
     }
 
     public void CheckVersion()
@@ -281,7 +281,7 @@ internal readonly struct LuaDebug : IDisposable
                 Source = p.GetRoot().Name;
                 LineDefined = p.LineDefined;
                 LastLineDefined = p.LastLineDefined;
-                What = (LineDefined == 0) ? "main" : "Lua";
+                What = (p.GetRoot() == p) ? "main" : "Lua";
             }
 
             ShortSourceLength = WriteShortSource(Source, ShortSource);
@@ -435,7 +435,7 @@ internal readonly struct LuaDebug : IDisposable
                     {
                         int k = i.C; /* key index */
                         int t = i.B; /* table index */
-                        
+
                         var vn = (op == OpCode.GetTable) /* name of indexed variable */
                             ? GetLocalName(chunk, t + 1, pc)
                             : chunk.UpValues[t].Name.ToString();
@@ -588,15 +588,15 @@ internal readonly struct LuaDebug : IDisposable
             {
                 /* add '...' before rest of name */
                 RETS.AsSpan().CopyTo(dest);
-                source[^(BUFFER_LEN - RETS_LEN )..].CopyTo(dest[RETS_LEN..]);
-                
+                source[^(BUFFER_LEN - RETS_LEN)..].CopyTo(dest[RETS_LEN..]);
+
                 return BUFFER_LEN;
             }
         }
         else
         {
             /* string; format as [string "source"] */
-            
+
 
             PRE.AsSpan().CopyTo(dest);
             int newLine = source.IndexOf('\n');
@@ -606,6 +606,7 @@ internal readonly struct LuaDebug : IDisposable
                 POS.AsSpan().CopyTo(dest[(PRE_LEN + source.Length)..]);
                 return PRE_LEN + source.Length + POS_LEN;
             }
+
             if (newLine != -1)
             {
                 source = source[..newLine]; /* stop at first newline */
@@ -615,13 +616,12 @@ internal readonly struct LuaDebug : IDisposable
             {
                 source = source[..(BUFFER_LEN - PRE_LEN - RETS_LEN - POS_LEN)];
             }
-            
+
             /* add '...' before rest of name */
             source.CopyTo(dest[PRE_LEN..]);
-            RETS.AsSpan().CopyTo(dest[(PRE_LEN+source.Length)..]);
-            POS.AsSpan().CopyTo(dest[(PRE_LEN+source.Length +RETS_LEN)..]);
-            return PRE_LEN+source.Length +RETS_LEN +POS_LEN;
-            
+            RETS.AsSpan().CopyTo(dest[(PRE_LEN + source.Length)..]);
+            POS.AsSpan().CopyTo(dest[(PRE_LEN + source.Length + RETS_LEN)..]);
+            return PRE_LEN + source.Length + RETS_LEN + POS_LEN;
         }
     }
 

@@ -95,7 +95,7 @@ public sealed class BasicLibrary
         // do not use LuaState.DoFileAsync as it uses the newExecutionContext
         var text = await File.ReadAllTextAsync(arg0, cancellationToken);
         var fileName = Path.GetFileName(arg0);
-        var chunk = LuaCompiler.Default.Compile(text, fileName);
+        var chunk = LuaCompiler.Default.Compile(text, "@"+fileName);
 
         return await new Closure(context.State, chunk).InvokeAsync(context, buffer, cancellationToken);
     }
@@ -201,10 +201,6 @@ public sealed class BasicLibrary
             if (arg0.TryRead<string>(out var str))
             {
                 var chunk = LuaCompiler.Default.Compile(str, arg1 ?? str);
-               //Console.WriteLine(str);
-                
-              //  Console.WriteLine(string.Join("\n ", chunk.Instructions.Zip(chunk.SourcePositions, (i, p) => $"{i} {p}")));
-              //    Console.WriteLine(string.Join("\n ", chunk.Locals.Select(l => $"{l.Name} [{l.Index}] {l.StartPc}..{l.EndPc}")));
                 buffer.Span[0] = new Closure(context.State, chunk, arg3);
                 return new(1);
             }
