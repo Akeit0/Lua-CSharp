@@ -242,20 +242,33 @@ public class DebugLibrary
         var value = context.GetArgument(2);
         if (func is not Closure closure)
         {
+            if (func is CsClosure csClosure)
+            {
+                var upValues = csClosure.UpValues;
+                if (index < 0 || index >= upValues.Length)
+                {
+                    upValues[index - 1] = value;
+                    buffer.Span[0] = "";
+                    return new(0);
+                }
+            }
+
             return new(0);
         }
 
-        var upValues = closure.UpValues;
-        var descriptions = closure.Proto.UpValues;
-        if (index < 0 || index >= descriptions.Length)
         {
-            return new(0);
-        }
+            var upValues = closure.UpValues;
+            var descriptions = closure.Proto.UpValues;
+            if (index < 0 || index >= descriptions.Length)
+            {
+                return new(0);
+            }
 
-        var description = descriptions[index];
-        buffer.Span[0] = description.Name.ToString();
-        upValues[index].SetValue(value);
-        return new(1);
+            var description = descriptions[index];
+            buffer.Span[0] = description.Name.ToString();
+            upValues[index].SetValue(value);
+            return new(1);
+        }
     }
 
     public ValueTask<int> GetMetatable(LuaFunctionExecutionContext context, Memory<LuaValue> buffer, CancellationToken cancellationToken)
