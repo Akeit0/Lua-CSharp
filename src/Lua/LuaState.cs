@@ -1,4 +1,5 @@
 using Lua.CodeAnalysis.Compilation;
+using Lua.Debugging;
 using System.Runtime.CompilerServices;
 using Lua.Internal;
 using Lua.Platforms;
@@ -208,7 +209,11 @@ public class LuaState : IDisposable
         get => CallOrReturnHookMask.Flag1;
         set => CallOrReturnHookMask.Flag1 = value;
     }
-
+    public IDebugger? Debugger
+    {
+        get => GlobalState.Debugger;
+        set => GlobalState.Debugger = value;
+    }
     public int CallStackFrameCount => CoreData == null ? 0 : CoreData!.CallStack.Count;
 
     public ref readonly CallStackFrame GetCurrentFrame()

@@ -386,6 +386,7 @@ public static partial class LuaVirtualMachine
                 }
 
                 context.LastHookPc = -1;
+            DebugResume:
                 var iA = instruction.A;
                 var opCode = instruction.OpCode;
                 switch (opCode)
@@ -899,7 +900,13 @@ public static partial class LuaVirtualMachine
                         }
 
                         continue;
-                    case OpCode.ExtraArg:
+                    case (OpCode)40:
+                        if (context.State.Debugger is { } debugger)
+                        {
+                            context.Instruction= instruction = debugger .HandleDebugBreak(context.State, context.Pc, context.LuaClosure);
+                            goto DebugResume;
+                        }
+                        continue;
                     default:
                         ThrowLuaNotImplementedException(context, context.Instruction.OpCode);
                         return true;

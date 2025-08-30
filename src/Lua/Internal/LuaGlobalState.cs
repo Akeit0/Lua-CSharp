@@ -1,3 +1,4 @@
+using Lua.Debugging;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using Lua.Internal;
@@ -37,6 +38,8 @@ sealed class LuaGlobalState
     public LuaPlatform Platform { get; set; }
 
     public ILuaModuleLoader? ModuleLoader { get; set; }
+
+    public IDebugger? Debugger { get; set; }
 
     // metatables
     LuaTable? nilMetatable;

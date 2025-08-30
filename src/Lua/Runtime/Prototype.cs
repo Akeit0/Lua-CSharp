@@ -37,6 +37,7 @@ public sealed class Prototype(
     public readonly int ParameterCount = parameterCount, MaxStackSize = maxStackSize;
     public readonly bool HasVariableArguments = hasVariableArguments;
 
+    internal Instruction[] UnderlyingCode => code;
 
     /// <summary>
     ///  Lua bytecode signature. If the bytes start with this signature, they are considered as Lua bytecode.
