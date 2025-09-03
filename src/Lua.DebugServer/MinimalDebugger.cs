@@ -60,10 +60,10 @@ class MinimalDebugger : IDebugger
 
     public Instruction HandleDebugBreak(LuaState thread, int pc, LuaClosure closure)
     {
-        //RpcServer .WriteToConsole($"[Lua.DebugServer] Breakpoint hit at {closure.Proto.ChunkName.TrimStart('@')}:{closure.Proto.LineInfo[pc]} (instruction {pc})");
         var proto = closure.Proto;
         var key = (proto, pc);
         Instruction oldInstruction;
+        bool byStep = false;
         lock (sync)
         {
             if (stepBreak is not null && stepBreak.Value.Key == key)
@@ -77,6 +77,7 @@ class MinimalDebugger : IDebugger
                 //     breakpoints.Remove(key);
                 // }
                 stepBreak = null;
+                byStep = true;
                 //RpcServer .WriteToConsole($"[Lua.DebugServer] Step breakpoint hit at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[pc]} (instruction {pc})");
             }
             else if (!breakpoints.TryGetValue(key, out oldInstruction))
@@ -85,6 +86,8 @@ class MinimalDebugger : IDebugger
                 throw new InvalidOperationException("No breakpoint set at this location.");
             }
         }
+
+        RpcServer.WriteToConsole($"[Lua.DebugServer] Breakpoint hit at {closure.Proto.ChunkName.TrimStart('@')}:{closure.Proto.LineInfo[pc]} (instruction {oldInstruction}:{pc}) by {(byStep ? "step" : "breakpoint")}");
 
         // Outside lock to avoid holding during UI roundtrip
         {
@@ -211,6 +214,8 @@ class MinimalDebugger : IDebugger
                 DebugUtility.PatchInstruction(sb.Key.proto, sb.Key.index, sb.Value);
                 stepBreak = null;
             }
+
+            stepMode = StepMode.None;
         }
     }
 
@@ -234,11 +239,11 @@ class MinimalDebugger : IDebugger
                         // Patch the step trap and store the original instruction in the breakpoint map
                         oldInstruction = DebugUtility.PatchDebugInstruction(proto, i);
                         this.stepBreak = new KeyValuePair<(Prototype, int), Instruction>(key, oldInstruction);
-                        RpcServer.WriteToConsole($"[Lua.DebugServer] Step-To-Next-Line armed at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[i]} (instruction {i}) {oldInstruction}");
+                        //RpcServer.WriteToConsole($"[Lua.DebugServer] Step-To-Next-Line armed at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[i]} (instruction {i}) {oldInstruction}");
                     }
                     else
                     {
-                        RpcServer.WriteToConsole($"[Lua.DebugServer] Step-To-Next-Line: already has a breakpoint at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[i]} (instruction {i}) {oldInstruction}");
+                        // RpcServer.WriteToConsole($"[Lua.DebugServer] Step-To-Next-Line: already has a breakpoint at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[i]} (instruction {i}) {oldInstruction}");
                     }
                 }
 
@@ -274,11 +279,11 @@ class MinimalDebugger : IDebugger
                     {
                         oldInstruction = DebugUtility.PatchDebugInstruction(p, 0);
                         stepBreak = new KeyValuePair<(Prototype, int), Instruction>(key, oldInstruction);
-                        RpcServer.WriteToConsole($"[Lua.DebugServer] Step-In armed at {p.ChunkName.TrimStart('@')}:{p.LineInfo[0]} (instruction 0) {oldInstruction}");
+                        //RpcServer.WriteToConsole($"[Lua.DebugServer] Step-In armed at {p.ChunkName.TrimStart('@')}:{p.LineInfo[0]} (instruction 0) {oldInstruction}");
                     }
                     else
                     {
-                        RpcServer.WriteToConsole($"[Lua.DebugServer] Step-In: callee already has a breakpoint at {p.ChunkName.TrimStart('@')}:{p.LineInfo[0]} (instruction 0) {oldInstruction}");
+                        //RpcServer.WriteToConsole($"[Lua.DebugServer] Step-In: callee already has a breakpoint at {p.ChunkName.TrimStart('@')}:{p.LineInfo[0]} (instruction 0) {oldInstruction}");
                     }
 
                     // Keep stepMode active until the trap fires
@@ -315,7 +320,7 @@ class MinimalDebugger : IDebugger
                     {
                         oldInstruction = DebugUtility.PatchDebugInstruction(p, i);
                         stepBreak = new KeyValuePair<(Prototype, int), Instruction>(key, oldInstruction);
-                        //RpcServer .WriteToConsole($"[Lua.DebugServer] Step-Out armed at {p.ChunkName.TrimStart('@')}:{p.LineInfo[i]} (instruction {i}) {oldInstruction}");
+                        //RpcServer.WriteToConsole($"[Lua.DebugServer] Step-Out armed at {p.ChunkName.TrimStart('@')}:{p.LineInfo[i]} (instruction {i}) {oldInstruction}");
                     }
                     else
                     {
