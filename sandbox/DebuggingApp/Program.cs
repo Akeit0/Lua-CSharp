@@ -45,6 +45,14 @@ class SimpleDebugger : IDebugger
         protos[proto.ChunkName] = proto;
     }
 
+    public void OnPushCallStackFrame(LuaState thread)
+    {
+    }
+
+    public void OnPopCallStackFrame(LuaState thread)
+    {
+    }
+
 
     public void PatchAll(Prototype proto)
     {

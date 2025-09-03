@@ -13,13 +13,13 @@ public class LuaState : IDisposable
     internal LuaState(LuaGlobalState globalState)
     {
         GlobalState = globalState;
-        CoreData = ThreadCoreData.Create();
+        coreData = ThreadCoreData.CreateCore();
     }
 
     internal LuaState(LuaGlobalState globalState, LuaFunction function, bool isProtectedMode)
     {
         GlobalState = globalState;
-        CoreData = ThreadCoreData.Create();
+        coreData = ThreadCoreData.CreateCore();
         coroutine = new(this, function, isProtectedMode);
     }
 
@@ -129,7 +129,7 @@ public class LuaState : IDisposable
 
         public ref ThreadCoreData? NextNode => ref nextNode;
 
-        public static ThreadCoreData Create()
+        public static ThreadCoreData CreateCore()
         {
             if (!pool.TryPop(out var result))
             {
@@ -150,8 +150,8 @@ public class LuaState : IDisposable
     FastListCore<UpValue> openUpValues;
     internal int CallCount;
     internal LuaGlobalState GlobalState { get; }
-    ThreadCoreData? CoreData;
-    CoroutineCore? coroutine;
+    ThreadCoreData? coreData;
+    readonly CoroutineCore? coroutine;
     internal bool IsLineHookEnabled;
     internal BitFlags2 CallOrReturnHookMask;
     internal bool IsInHook;
@@ -172,7 +172,7 @@ public class LuaState : IDisposable
 
     public bool CanResume => GetStatus() == LuaThreadStatus.Suspended;
 
-    public LuaStack Stack => CoreData!.Stack;
+    public LuaStack Stack => coreData!.Stack;
 
     internal Traceback? LuaTraceback => coroutine?.Traceback;
 
@@ -216,21 +216,21 @@ public class LuaState : IDisposable
         set => GlobalState.Debugger = value;
     }
 
-    public int CallStackFrameCount => CoreData == null ? 0 : CoreData!.CallStack.Count;
+    public int CallStackFrameCount => coreData == null ? 0 : coreData!.CallStack.Count;
 
     public ref readonly CallStackFrame GetCurrentFrame()
     {
-        return ref CoreData!.CallStack.PeekRef();
+        return ref coreData!.CallStack.PeekRef();
     }
 
     public ReadOnlySpan<LuaValue> GetStackValues()
     {
-        return CoreData == null ? default : CoreData!.Stack.AsSpan();
+        return coreData == null ? default : coreData!.Stack.AsSpan();
     }
 
     public ReadOnlySpan<CallStackFrame> GetCallStackFrames()
     {
-        return CoreData == null ? default : CoreData!.CallStack.AsSpan();
+        return coreData == null ? default : coreData!.CallStack.AsSpan();
     }
 
 
@@ -274,14 +274,15 @@ public class LuaState : IDisposable
     {
         CurrentException?.BuildOrGet();
         CurrentException = null;
-        ref var callStack = ref CoreData!.CallStack;
+        ref var callStack = ref coreData!.CallStack;
         callStack.Push(frame);
+        Debugger?.OnPushCallStackFrame(this);
     }
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrameWithStackPop()
     {
-        var coreData = CoreData!;
+        var coreData = this.coreData!;
         ref var callStack = ref coreData.CallStack;
         var popFrame = callStack.Pop();
         if (CurrentException != null)
@@ -295,7 +296,7 @@ public class LuaState : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrameWithStackPop(int frameBase)
     {
-        var coreData = CoreData!;
+        var coreData = this.coreData!;
         ref var callStack = ref coreData.CallStack;
         var popFrame = callStack.Pop();
         if (CurrentException != null)
@@ -311,7 +312,8 @@ public class LuaState : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrame()
     {
-        var coreData = CoreData!;
+        Debugger?.OnPopCallStackFrame(this);
+        var coreData = this.coreData!;
         ref var callStack = ref coreData.CallStack;
         var popFrame = callStack.Pop();
         if (CurrentException != null)
@@ -323,7 +325,7 @@ public class LuaState : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrameUntil(int top)
     {
-        var coreData = CoreData!;
+        var coreData = this.coreData!;
         ref var callStack = ref coreData.CallStack;
         if (CurrentException != null)
         {
@@ -509,12 +511,12 @@ public class LuaState : IDisposable
 
     public void Dispose()
     {
-        if (CoreData!.CallStack.Count != 0)
+        if (coreData!.CallStack.Count != 0)
         {
             throw new InvalidOperationException("This state is running! Call stack is not empty!!");
         }
 
-        CoreData.Release();
-        CoreData = null!;
+        coreData.Release();
+        coreData = null!;
     }
 }

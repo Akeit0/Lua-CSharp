@@ -98,11 +98,17 @@ sealed class LuaDebugSession
         });
     }
 
-    public void Continue()
+    public void Continue(bool skipStepBreak = false)
     {
+        if (skipStepBreak)
+        {
+            debugger?.DeleteStepBreak();
+        }
+
         pauseTcs?.TrySetResult(true);
+        RpcServer.Publish("continued", new { threadId = 1, allThreadsContinued = true });
     }
-    
+
 
     void EnsureDebugger()
     {
@@ -121,6 +127,7 @@ sealed class LuaDebugSession
 
         if (s is null)
         {
+            RpcServer.Publish("output", new { category = "stderr", output = "[Lua.DebugServer] Warning: Breakpoint hit but no debug session is active.\n" });
             return;
         }
 
@@ -143,6 +150,7 @@ sealed class LuaDebugSession
             RpcServer.Publish("stopped", new { reason = publishReason, threadId = 1, file, line });
         }
 
+        RpcServer.Publish("wait", new { reason = "started", threadId = 1 });
         toWait.Wait();
     }
 
@@ -189,7 +197,7 @@ sealed class LuaDebugSession
                         name = name.Trim();
                         if (name.Length == 0) continue;
                         string value;
-                        try { value = kv.Value.ToString() ; }
+                        try { value = kv.Value.ToString(); }
                         catch { value = ""; }
 
                         globals.Add((name, value));
@@ -226,13 +234,25 @@ sealed class LuaDebugSession
             return (lastProto, lastPc);
         }
     }
-    
+
     public void StepNext()
     {
         if (debugger is null || lastProto is null) return;
         isSteppingNext = true;
         stepDepth = lastDepth;
         debugger.SetStepToNextLine(lastProto, lastPc);
+    }
+
+    public void StepIn()
+    {
+        if (debugger is null) return;
+        debugger.StartStepIn();
+    }
+
+    public void StepOut()
+    {
+        if (debugger is null) return;
+        debugger.StartStepOut();
     }
 
     public bool ShouldSkipBreak(int currentDepth)

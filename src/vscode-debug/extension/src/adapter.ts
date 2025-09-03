@@ -140,6 +140,20 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     this.rpcCall('next').finally(() => this.sendResponse(response));
   }
 
+  protected stepInRequest(
+    response: DebugProtocol.StepInResponse,
+    _args: DebugProtocol.StepInArguments
+  ): void {
+    this.rpcCall('stepIn').finally(() => this.sendResponse(response));
+  }
+
+  protected stepOutRequest(
+    response: DebugProtocol.StepOutResponse,
+    _args: DebugProtocol.StepOutArguments
+  ): void {
+    this.rpcCall('stepOut').finally(() => this.sendResponse(response));
+  }
+
   protected setBreakPointsRequest(
     response: DebugProtocol.SetBreakpointsResponse,
     args: DebugProtocol.SetBreakpointsArguments

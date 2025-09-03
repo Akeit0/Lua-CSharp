@@ -3,12 +3,7 @@ using System.Text.Json.Serialization;
 
 static class RpcServer
 {
-    static readonly JsonSerializerOptions options = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
-        WriteIndented = false
-    };
+    static readonly JsonSerializerOptions options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, WriteIndented = false };
 
     static readonly object writeLock = new();
 
@@ -33,45 +28,52 @@ static class RpcServer
                 switch (method)
                 {
                     case "ping":
-                         WriteResponse(id, new { message = "pong" });
+                        WriteResponse(id, new { message = "pong" });
                         break;
                     case "initialize":
                         if (LuaDebugSession.Current is null)
                         {
                             LuaDebugSession.Current = new LuaDebugSession();
                         }
+
                         WriteEvent("initialized", new { });
                         WriteResponse(id, new { capabilities = new { } });
                         break;
                     case "setBreakpoints":
-                         HandleSetBreakpoints(id, @params);
+                        HandleSetBreakpoints(id, @params);
                         break;
                     case "launch":
                         await HandleLaunchAsync(id, @params);
                         break;
                     case "continue":
-                         HandleContinue(id);
+                        HandleContinue(id);
                         break;
                     case "next":
-                          HandleNext(id);
+                        HandleNext(id);
+                        break;
+                    case "stepIn":
+                        HandleStepIn(id);
+                        break;
+                    case "stepOut":
+                        HandleStepOut(id);
                         break;
                     case "getLocals":
-                         HandleGetLocals(id);
+                        HandleGetLocals(id);
                         break;
                     case "getGlobals":
-                         HandleGetGlobals(id);
+                        HandleGetGlobals(id);
                         break;
                     case "terminate":
-                         WriteResponse(id, new { });
+                        WriteResponse(id, new { });
                         return;
                     default:
-                         WriteResponse(id, error: new { message = $"Unknown method: {method}" });
+                        WriteResponse(id, error: new { message = $"Unknown method: {method}" });
                         break;
                 }
             }
             catch (Exception ex)
             {
-                 WriteEvent("output", new { category = "stderr", output = ex + "\n" });
+                WriteEvent("output", new { category = "stderr", output = ex + "\n" });
             }
         }
     }
@@ -104,6 +106,7 @@ static class RpcServer
             Console.Out.Flush();
         }
     }
+
     // Handlers
     static void HandleSetBreakpoints(string? id, JsonElement @params)
     {
@@ -112,15 +115,17 @@ static class RpcServer
         if (@params.TryGetProperty("lines", out var arr))
         {
             foreach (var el in arr.EnumerateArray())
-                if (el.TryGetInt32(out var l)) lines.Add(l);
+                if (el.TryGetInt32(out var l))
+                    lines.Add(l);
         }
+
         if (LuaDebugSession.Current is null)
         {
             LuaDebugSession.Current = new LuaDebugSession();
         }
+
         LuaDebugSession.Current.SetBreakpoints(source, lines);
         WriteResponse(id, new { breakpoints = lines.Select(l => new { verified = true, line = l }).ToArray() });
-        
     }
 
     static async Task HandleLaunchAsync(string? id, JsonElement @params)
@@ -133,13 +138,14 @@ static class RpcServer
         {
             LuaDebugSession.Current = new LuaDebugSession();
         }
+
         await LuaDebugSession.Current.LaunchAsync(program, cwd, stopOnEntry);
         WriteResponse(id, new { });
     }
 
     static void HandleContinue(string? id)
     {
-        LuaDebugSession.Current?.Continue();
+        LuaDebugSession.Current?.Continue(true);
         WriteResponse(id, new { allThreadsContinued = true });
     }
 
@@ -154,6 +160,24 @@ static class RpcServer
         var session = LuaDebugSession.Current;
         if (session is null) return;
         session.StepNext();
+        session.Continue();
+        WriteResponse(id, new { });
+    }
+
+    static void HandleStepIn(string? id)
+    {
+        var session = LuaDebugSession.Current;
+        if (session is null) return;
+        session.StepIn();
+        session.Continue();
+        WriteResponse(id, new { });
+    }
+
+    static void HandleStepOut(string? id)
+    {
+        var session = LuaDebugSession.Current;
+        if (session is null) return;
+        session.StepOut();
         session.Continue();
         WriteResponse(id, new { });
     }
