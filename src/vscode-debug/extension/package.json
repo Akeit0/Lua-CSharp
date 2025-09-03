@@ -1,0 +1,75 @@
+{
+  "name": "lua-csharp-vscode-debug",
+  "displayName": "Lua-CSharp Debugger",
+  "description": "Debug Lua scripts running on the Lua-CSharp runtime.",
+  "version": "0.0.1",
+  "publisher": "local",
+  "private": true,
+  "engines": {
+    "vscode": "^1.94.0"
+  },
+  "categories": [
+    "Debuggers"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onDebugResolve:lua-csharp"
+  ],
+  "contributes": {
+    "debuggers": [
+      {
+        "type": "lua-csharp",
+        "label": "Lua-CSharp",
+        "languages": ["lua"],
+        "program": "./dist/extension.js",
+        "configurationAttributes": {
+          "launch": {
+            "required": ["program"],
+            "properties": {
+              "program": {
+                "type": "string",
+                "description": "Path to the Lua script to debug.",
+                "default": "${workspaceFolder}/sandbox/DebuggingApp/test.lua"
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Working directory for the debug target.",
+                "default": "${workspaceFolder}/sandbox/DebuggingApp"
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Break on entry to the program.",
+                "default": true
+              }
+            }
+          }
+        },
+        "initialConfigurations": [
+          {
+            "name": "Lua-CSharp: Launch",
+            "type": "lua-csharp",
+            "request": "launch",
+            "program": "${workspaceFolder}/sandbox/DebuggingApp/test.lua",
+            "cwd": "${workspaceFolder}/sandbox/DebuggingApp",
+            "stopOnEntry": true
+          }
+        ]
+      }
+    ]
+  },
+  "scripts": {
+    "compile": "node ./scripts/build.mjs",
+    "build": "npm run compile",
+    "watch": "node ./scripts/build.mjs --watch",
+    "vscode:prepublish": "npm run compile",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.30",
+    "@types/vscode": "^1.94.0",
+    "@vscode/debugadapter": "^1.68.0",
+    "@vscode/debugprotocol": "^1.68.0",
+    "esbuild": "^0.21.0",
+    "vsce": "^2.15.0"
+  }
+}

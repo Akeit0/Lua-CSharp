@@ -1,0 +1,14 @@
+**/*.map
+**/*.ts
+**/src/**
+**/scripts/**
+**/tsconfig.json
+**/.eslintrc*
+**/.vscode/**
+**/.git/**
+**/node_modules/**
+**/out/**
+**/test/**
+**/tests/**
+**/.github/**
+

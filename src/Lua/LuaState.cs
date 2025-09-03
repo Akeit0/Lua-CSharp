@@ -209,11 +209,13 @@ public class LuaState : IDisposable
         get => CallOrReturnHookMask.Flag1;
         set => CallOrReturnHookMask.Flag1 = value;
     }
+
     public IDebugger? Debugger
     {
         get => GlobalState.Debugger;
         set => GlobalState.Debugger = value;
     }
+
     public int CallStackFrameCount => CoreData == null ? 0 : CoreData!.CallStack.Count;
 
     public ref readonly CallStackFrame GetCurrentFrame()
@@ -440,6 +442,8 @@ public class LuaState : IDisposable
         {
             prototype = Parser.Parse(this, new(ptr, chunk.Length), chunkName);
         }
+
+        Debugger?.RegisterPrototype(prototype);
 
         return new(this, prototype, environment);
     }

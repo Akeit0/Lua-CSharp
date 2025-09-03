@@ -1,0 +1,14 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Lua-CSharp: Launch (sample)",
+      "type": "lua-csharp",
+      "request": "launch",
+      "program": "${workspaceFolder}/test.lua",
+      "cwd": "${workspaceFolder}",
+      "stopOnEntry": true
+    }
+  ]
+}
+
