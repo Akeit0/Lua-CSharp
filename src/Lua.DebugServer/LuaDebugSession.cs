@@ -350,4 +350,18 @@ sealed class LuaDebugSession
             return isSteppingNext;
         }
     }
+
+    public void SetInstructionBreakpoint(string chunkName, int index, bool enabled)
+    {
+        EnsureDebugger();
+        if (debugger is null) return;
+        if (enabled) debugger.SetInstructionBreakpoint(chunkName, index);
+        else debugger.ClearInstructionBreakpoint(chunkName, index);
+    }
+
+    public int[] GetInstructionBreakpoints(string chunkName)
+    {
+        EnsureDebugger();
+        return debugger?.GetInstructionBreakpoints(chunkName) ?? Array.Empty<int>();
+    }
 }

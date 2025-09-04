@@ -64,6 +64,12 @@ static class RpcServer
                     case "getGlobals":
                         HandleGetGlobals(id);
                         break;
+                    case "getInstrBreakpoints":
+                        HandleGetInstrBreakpoints(id, @params);
+                        break;
+                    case "setInstrBreakpoint":
+                        HandleSetInstrBreakpoint(id, @params);
+                        break;
                     case "getBytecode":
                         HandleGetBytecode(id);
                         break;
@@ -207,5 +213,21 @@ static class RpcServer
         }
 
         WriteResponse(id, result);
+    }
+
+    static void HandleGetInstrBreakpoints(string? id, JsonElement @params)
+    {
+        var chunk = @params.GetProperty("chunk").GetString() ?? string.Empty;
+        var bps = LuaDebugSession.Current?.GetInstructionBreakpoints(chunk) ?? Array.Empty<int>();
+        WriteResponse(id, new { breakpoints = bps });
+    }
+
+    static void HandleSetInstrBreakpoint(string? id, JsonElement @params)
+    {
+        var chunk = @params.GetProperty("chunk").GetString() ?? string.Empty;
+        var index = @params.GetProperty("index").GetInt32();
+        var enabled = @params.TryGetProperty("enabled", out var e) && e.GetBoolean();
+        LuaDebugSession.Current?.SetInstructionBreakpoint(chunk, index, enabled);
+        WriteResponse(id, new { });
     }
 }

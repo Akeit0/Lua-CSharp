@@ -33,6 +33,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private localsRef = 0;
   private globalsRef = 0;
   private panel?: vscode.WebviewPanel;
+  private lastBytecodeChunk?: string;
 
   public constructor() {
     super();
@@ -349,10 +350,27 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       'luaBytecode',
       'Lua Bytecode',
       vscode.ViewColumn.Beside,
-      { enableFindWidget: true }
+      { enableFindWidget: true, enableScripts: true }
     );
     this.panel.onDidDispose(() => {
       this.panel = undefined;
+    });
+    this.panel.webview.onDidReceiveMessage(async (msg) => {
+      if (!this.lastBytecodeChunk) return;
+      if (msg && msg.cmd === 'toggleInstrBp') {
+        const index = Number(msg.index);
+        const has = !!msg.has;
+        try {
+          await this.rpcCall('setInstrBreakpoint', {
+            chunk: this.lastBytecodeChunk,
+            index,
+            enabled: !has,
+          });
+          await this.renderBytecode();
+        } catch (e) {
+          this.sendEvent(new OutputEvent(`[lua-csharp] setInstrBreakpoint error: ${e}\n`));
+        }
+      }
     });
   }
 
@@ -366,7 +384,10 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       const constants: string[] = res?.constants ?? [];
       const locals: { name: string; startPc: number; endPc: number }[] = res?.locals ?? [];
       const upvalues: { name: string; isLocal: boolean; index: number }[] = res?.upvalues ?? [];
-      const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues);
+      this.lastBytecodeChunk = chunk;
+      const bpsRes = await this.rpcCall('getInstrBreakpoints', { chunk });
+      const indices: number[] = bpsRes?.breakpoints ?? [];
+      const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices));
       this.panel.title = `Lua Bytecode: ${path.basename(chunk || 'current')}`;
       this.panel.webview.html = html;
     } catch (err) {
@@ -380,15 +401,18 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     instr: { index: number; line: number; text: string }[],
     constants: string[],
     locals: { name: string; startPc: number; endPc: number }[],
-    upvalues: { name: string; isLocal: boolean; index: number }[]
+    upvalues: { name: string; isLocal: boolean; index: number }[],
+    bpSet: Set<number>
   ): string {
     const rows = instr
       .map((i) => {
-        const cls = i.index === pc ? 'row current' : 'row';
+        const has = bpSet.has(i.index);
+        const cls = i.index === pc ? 'row current' : has ? 'row bp' : 'row';
         const ln = i.line ? String(i.line) : '';
         const idx = String(i.index);
         const text = this.escapeHtml(i.text);
-        return `<div class="${cls}" data-idx="${idx}"><span class="col idx">[${idx}]</span><span class="col line">${ln}</span><span class="col text">${text}</span></div>`;
+        const marker = has ? '<span class="mark">●</span>' : '<span class="mark">○</span>';
+        return `<div class="${cls}" data-idx="${idx}" data-has="${has ? 1 : 0}"><span class="col idx">${marker} [${idx}]</span><span class="col line">${ln}</span><span class="col text">${text}</span></div>`;
       })
       .join('');
 
@@ -425,6 +449,10 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     .col.idx { color: var(--vscode-descriptionForeground); }
     .col.line { color: var(--vscode-descriptionForeground); }
     .col.text { white-space: pre; }
+    .row .mark { display: inline-block; width: 10px; color: var(--vscode-charts-red, #c33); margin-right: 4px; }
+    .row.bp .mark { color: var(--vscode-charts-red, #c33); }
+    .row:not(.bp) .mark { color: var(--vscode-descriptionForeground); }
+    .hint { color: var(--vscode-descriptionForeground); font-style: italic; margin: 6px; }
     .section { margin-top: 10px; }
     .title { margin: 8px 0 4px; font-weight: bold; color: var(--vscode-foreground); }
     .grid.consts .row { grid-template-columns: 80px 1fr; }
@@ -436,6 +464,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
 <body>
   <div class="header">${head}</div>
   <div class="grid">${rows}</div>
+  <div class="hint">Click a row to toggle an instruction breakpoint.</div>
   <div class="section">
     <div class="title">Constants</div>
     <div class="grid consts">${constRows}</div>
@@ -449,7 +478,21 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     <div class="grid upvals">${upvalRows}</div>
   </div>
 </body>
-</html>`;
+</html>` +
+      `
+<script>
+  const vscode = acquireVsCodeApi();
+  document.querySelectorAll('.grid .row').forEach((row) => {
+    row.addEventListener('click', () => {
+      const idxAttr = row.getAttribute('data-idx');
+      if (idxAttr === null) return; // only instruction rows have data-idx
+      const idxNum = Number(idxAttr);
+      if (!Number.isFinite(idxNum)) return;
+      const has = row.getAttribute('data-has') === '1';
+      vscode.postMessage({ cmd: 'toggleInstrBp', index: idxNum, has });
+    });
+  });
+</script>`;
   }
 
   private escapeHtml(s: string): string {

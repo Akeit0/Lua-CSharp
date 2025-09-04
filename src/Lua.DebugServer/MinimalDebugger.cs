@@ -7,6 +7,7 @@ class MinimalDebugger : IDebugger
     readonly Dictionary<(Prototype, int), Instruction> breakpoints = new();
     readonly Dictionary<string, List<int>> pending = new();
     readonly Dictionary<string, Prototype> protos = new();
+    readonly Dictionary<string, HashSet<int>> instrPending = new(StringComparer.Ordinal);
     KeyValuePair<(Prototype proto, int index), Instruction>? stepBreak;
     LuaState? lastThread;
     readonly object sync = new();
@@ -38,6 +39,19 @@ class MinimalDebugger : IDebugger
         else
         {
             RpcServer.WriteToConsole($"[Lua.DebugServer] No active debug session");
+        }
+
+        // Apply any pending instruction index breakpoints
+        lock (sync)
+        {
+            if (instrPending.TryGetValue(proto.ChunkName, out var set))
+            {
+                foreach (var idx in set)
+                {
+                    if (idx >= 0 && idx < proto.Code.Length)
+                        SetBreakpoint(proto, idx);
+                }
+            }
         }
     }
 
@@ -177,6 +191,67 @@ class MinimalDebugger : IDebugger
                 var oldInstruction = DebugUtility.PatchDebugInstruction(proto, instructionIndex);
                 breakpoints[key] = oldInstruction;
             }
+        }
+    }
+
+    public void SetInstructionBreakpoint(string chunkName, int index)
+    {
+        if (!chunkName.StartsWith('@')) chunkName = "@" + chunkName;
+        lock (sync)
+        {
+            if (protos.TryGetValue(chunkName, out var proto))
+            {
+                SetBreakpoint(proto, index);
+            }
+
+            if (!instrPending.TryGetValue(chunkName, out var set))
+            {
+                set = new HashSet<int>();
+                instrPending[chunkName] = set;
+            }
+
+            set.Add(index);
+        }
+    }
+
+    public void ClearInstructionBreakpoint(string chunkName, int index)
+    {
+        if (!chunkName.StartsWith('@')) chunkName = "@" + chunkName;
+        lock (sync)
+        {
+            if (protos.TryGetValue(chunkName, out var proto))
+            {
+                var key = (proto, index);
+                if (breakpoints.TryGetValue(key, out var old))
+                {
+                    DebugUtility.PatchInstruction(proto, index, old);
+                    breakpoints.Remove(key);
+                }
+            }
+
+            if (instrPending.TryGetValue(chunkName, out var set))
+            {
+                set.Remove(index);
+                if (set.Count == 0) instrPending.Remove(chunkName);
+            }
+        }
+    }
+
+    public int[] GetInstructionBreakpoints(string chunkName)
+    {
+        if (!chunkName.StartsWith('@')) chunkName = "@" + chunkName;
+        lock (sync)
+        {
+            if (!protos.TryGetValue(chunkName, out var proto))
+                return instrPending.TryGetValue(chunkName, out var set) ? set.ToArray() : Array.Empty<int>();
+
+            var list = new List<int>();
+            foreach (var kv in breakpoints.Keys)
+            {
+                if (kv.Item1 == proto) list.Add(kv.Item2);
+            }
+
+            return list.ToArray();
         }
     }
 
