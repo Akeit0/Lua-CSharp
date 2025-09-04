@@ -183,7 +183,9 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           case 'output': {
             const body = msg.body || {};
             const text = (body.output ?? '') as string;
-            this.sendEvent(new OutputEvent(text));
+            // category 
+            // important|stdout|stderr|console
+            this.sendEvent(new OutputEvent(text, body.category));
             break;
           }
           case 'stopped': {

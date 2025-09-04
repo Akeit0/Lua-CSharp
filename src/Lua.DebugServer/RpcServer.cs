@@ -10,7 +10,7 @@ static class RpcServer
     public static async Task RunAsync()
     {
         // Send an initial output event so the client knows we're alive
-        WriteEvent("output", new { category = "console", output = "Lua.DebugServer ready\n" });
+        WriteLogToConsole("Lua.DebugServer ready");
 
         string? line;
         while ((line = await Console.In.ReadLineAsync()) is not null)
@@ -92,9 +92,14 @@ static class RpcServer
         Write(payload);
     }
 
-    public static void WriteToConsole(string text)
+    public static void WriteToConsole(string text,string category="console")
     {
-        WriteEvent("output", new { category = "console", output = text + "\n" });
+        WriteEvent("output", new { category = category, output = text + "\n" });
+    }
+    
+    public static void WriteLogToConsole(string text)
+    {
+        WriteEvent("output", new { category = "important", output = text + "\n" });
     }
 
     static void Write(object payload)

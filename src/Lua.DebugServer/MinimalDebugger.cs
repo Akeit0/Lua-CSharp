@@ -82,12 +82,12 @@ class MinimalDebugger : IDebugger
             }
             else if (!breakpoints.TryGetValue(key, out oldInstruction))
             {
-                RpcServer.WriteToConsole($"[Lua.DebugServer] Breakpoint hit at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[pc]} (instruction {pc}) but no breakpoint was registered here.");
+                RpcServer.WriteLogToConsole($"[Lua.DebugServer] Breakpoint hit at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[pc]} (instruction {pc}) but no breakpoint was registered here.");
                 throw new InvalidOperationException("No breakpoint set at this location.");
             }
         }
 
-        RpcServer.WriteToConsole($"[Lua.DebugServer] Breakpoint hit at {closure.Proto.ChunkName.TrimStart('@')}:{closure.Proto.LineInfo[pc]} (instruction {oldInstruction}:{pc}) by {(byStep ? "step" : "breakpoint")}");
+        RpcServer.WriteLogToConsole($"[Lua.DebugServer] Breakpoint hit at {Path.GetFileName(closure.Proto.ChunkName.TrimStart('@'))}:{closure.Proto.LineInfo[pc]} (instruction {oldInstruction}:{pc}) by {(byStep ? "step" : "breakpoint")}");
 
         // Outside lock to avoid holding during UI roundtrip
         {
@@ -331,7 +331,7 @@ class MinimalDebugger : IDebugger
             }
             else
             {
-                RpcServer.WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame: caller is not a LuaClosure");
+                RpcServer.WriteLogToConsole($"[Lua.DebugServer] OnPopCallStackFrame: caller is not a LuaClosure");
             }
         }
     }
