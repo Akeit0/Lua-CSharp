@@ -363,7 +363,10 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       const chunk = (res?.chunk as string) || '';
       const pc = (res?.pc as number) ?? -1;
       const instr: { index: number; line: number; text: string }[] = res?.instructions ?? [];
-      const html = this.buildHtml(chunk, pc, instr);
+      const constants: string[] = res?.constants ?? [];
+      const locals: { name: string; startPc: number; endPc: number }[] = res?.locals ?? [];
+      const upvalues: { name: string; isLocal: boolean; index: number }[] = res?.upvalues ?? [];
+      const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues);
       this.panel.title = `Lua Bytecode: ${path.basename(chunk || 'current')}`;
       this.panel.webview.html = html;
     } catch (err) {
@@ -374,7 +377,10 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private buildHtml(
     chunk: string,
     pc: number,
-    instr: { index: number; line: number; text: string }[]
+    instr: { index: number; line: number; text: string }[],
+    constants: string[],
+    locals: { name: string; startPc: number; endPc: number }[],
+    upvalues: { name: string; isLocal: boolean; index: number }[]
   ): string {
     const rows = instr
       .map((i) => {
@@ -383,6 +389,25 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
         const idx = String(i.index);
         const text = this.escapeHtml(i.text);
         return `<div class="${cls}" data-idx="${idx}"><span class="col idx">[${idx}]</span><span class="col line">${ln}</span><span class="col text">${text}</span></div>`;
+      })
+      .join('');
+
+    const constRows = constants
+      .map((c, i) => {
+        return `<div class="row"><span class="col idx">[${i}]</span><span class="col text" style="grid-column: span 2;">${this.escapeHtml(String(c))}</span></div>`;
+      })
+      .join('');
+
+    const localsRows = locals
+      .map((l, i) => {
+        return `<div class="row"><span class="col idx">[${i}]</span><span class="col name">${this.escapeHtml(l.name)}</span><span class="col meta">${l.startPc} .. ${l.endPc}</span></div>`;
+      })
+      .join('');
+
+    const upvalRows = upvalues
+      .map((u, i) => {
+        const il = u.isLocal ? 1 : 0;
+        return `<div class="row"><span class="col idx">[${i}]</span><span class="col name">${this.escapeHtml(u.name)}</span><span class="col meta">${il} \t ${u.index}</span></div>`;
       })
       .join('');
     const head = this.escapeHtml(chunk || '');
@@ -400,12 +425,29 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     .col.idx { color: var(--vscode-descriptionForeground); }
     .col.line { color: var(--vscode-descriptionForeground); }
     .col.text { white-space: pre; }
+    .section { margin-top: 10px; }
+    .title { margin: 8px 0 4px; font-weight: bold; color: var(--vscode-foreground); }
+    .grid.consts .row { grid-template-columns: 80px 1fr; }
+    .grid.locals .row { grid-template-columns: 80px 1fr 1fr; }
+    .grid.upvals .row { grid-template-columns: 80px 1fr 1fr; }
   </style>
   <title>Lua Bytecode</title>
   </head>
 <body>
   <div class="header">${head}</div>
   <div class="grid">${rows}</div>
+  <div class="section">
+    <div class="title">Constants</div>
+    <div class="grid consts">${constRows}</div>
+  </div>
+  <div class="section">
+    <div class="title">Local Variables</div>
+    <div class="grid locals">${localsRows}</div>
+  </div>
+  <div class="section">
+    <div class="title">UpValues</div>
+    <div class="grid upvals">${upvalRows}</div>
+  </div>
 </body>
 </html>`;
   }
