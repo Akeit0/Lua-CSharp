@@ -235,6 +235,86 @@ sealed class LuaDebugSession
         }
     }
 
+    public object? GetBytecodeSnapshot()
+    {
+        lock (locals)
+        {
+            if (lastProto is null) return null;
+            var proto = lastProto;
+            var code = proto.Code;
+            var lines = proto.LineInfo;
+            var instructions = new List<object>(code.Length);
+            for (int i = 0; i < code.Length; i++)
+            {
+                int line = (i >= 0 && i < lines.Length) ? lines[i] : 0;
+                var instruction = code[i];
+                // If this is a patched debug trap, replace with original instruction for display
+
+
+                if (code[i].OpCode == (OpCode)40 && debugger is not null)
+                {
+                    if (debugger.TryGetPatchedOriginal(proto, i, out var original, out _))
+                    {
+                        instruction = original;
+                    }
+                }
+
+
+                string text;
+                try { text = instruction.ToString(); }
+                catch { text = instruction.Value.ToString(); }
+
+                instructions.Add(new { index = i, line, text });
+            }
+
+            // Best-effort metadata
+            var constants = new List<string>();
+            try
+            {
+                foreach (var k in proto.Constants)
+                {
+                    string v;
+                    try { v = k.ToString(); }
+                    catch { v = string.Empty; }
+
+                    constants.Add(v);
+                }
+            }
+            catch { }
+
+            var localsMeta = new List<object>();
+            try
+            {
+                foreach (var lv in proto.LocalVariables)
+                {
+                    localsMeta.Add(new { lv.Name, lv.StartPc, lv.EndPc });
+                }
+            }
+            catch { }
+
+            var upvaluesMeta = new List<object>();
+            try
+            {
+                foreach (var uv in proto.UpValues)
+                {
+                    upvaluesMeta.Add(new { uv.Name, uv.IsLocal, uv.Index });
+                }
+            }
+            catch { }
+
+            string chunk = proto.ChunkName.TrimStart('@');
+            return new
+            {
+                chunk,
+                pc = lastPc,
+                instructions = instructions.ToArray(),
+                constants = constants.ToArray(),
+                locals = localsMeta.ToArray(),
+                upvalues = upvaluesMeta.ToArray(),
+            };
+        }
+    }
+
     public void StepNext()
     {
         if (debugger is null || lastProto is null) return;

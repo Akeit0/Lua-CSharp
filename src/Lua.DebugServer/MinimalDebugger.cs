@@ -407,4 +407,29 @@ class MinimalDebugger : IDebugger
             stepMode = StepMode.Out;
         }
     }
+
+    // Expose patched original instruction info for UI snapshot
+    public bool TryGetPatchedOriginal(Prototype proto, int index, out Instruction original, out bool isStep)
+    {
+        lock (sync)
+        {
+            if (stepBreak is { } sb && sb.Key.proto == proto && sb.Key.index == index)
+            {
+                original = sb.Value;
+                isStep = true;
+                return true;
+            }
+
+            if (breakpoints.TryGetValue((proto, index), out var old))
+            {
+                original = old;
+                isStep = false;
+                return true;
+            }
+        }
+
+        original = default;
+        isStep = false;
+        return false;
+    }
 }

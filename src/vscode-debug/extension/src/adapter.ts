@@ -14,6 +14,7 @@ import { spawn, ChildProcessWithoutNullStreams } from 'node:child_process';
 import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
+import * as vscode from 'vscode';
 
 export class LuaCSharpDebugSession extends LoggingDebugSession {
   private configurationDone = false;
@@ -31,6 +32,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private nextVarRef = 1;
   private localsRef = 0;
   private globalsRef = 0;
+  private panel?: vscode.WebviewPanel;
 
   public constructor() {
     super();
@@ -195,6 +197,9 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             this.localsRef = ++this.nextVarRef;
             this.globalsRef = ++this.nextVarRef;
             this.sendEvent(new StoppedEvent(reason, this.threadId));
+            // Update bytecode viewer
+            this.ensurePanel();
+            this.renderBytecode();
             break;
           }
           case 'terminated':
@@ -333,5 +338,132 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       response.body = { variables: [] };
       this.sendResponse(response);
     }
+  }
+
+  // Bytecode webview helpers
+  private ensurePanel() {
+    if (this.panel) {
+      return;
+    }
+    this.panel = vscode.window.createWebviewPanel(
+      'luaBytecode',
+      'Lua Bytecode',
+      vscode.ViewColumn.Beside,
+      { enableFindWidget: true }
+    );
+    this.panel.onDidDispose(() => {
+      this.panel = undefined;
+    });
+  }
+
+  private async renderBytecode() {
+    if (!this.panel) return;
+    try {
+      const res = await this.rpcCall('getBytecode');
+      const chunk = (res?.chunk as string) || '';
+      const pc = (res?.pc as number) ?? -1;
+      const instr: { index: number; line: number; text: string }[] = res?.instructions ?? [];
+      const html = this.buildHtml(chunk, pc, instr);
+      this.panel.title = `Lua Bytecode: ${path.basename(chunk || 'current')}`;
+      this.panel.webview.html = html;
+    } catch (err) {
+      this.sendEvent(new OutputEvent(`[lua-csharp] getBytecode error: ${err}\n`));
+    }
+  }
+
+  private buildHtml(
+    chunk: string,
+    pc: number,
+    instr: { index: number; line: number; text: string }[]
+  ): string {
+    const rows = instr
+      .map((i) => {
+        const cls = i.index === pc ? 'row current' : 'row';
+        const ln = i.line ? String(i.line) : '';
+        const idx = String(i.index);
+        const text = this.escapeHtml(i.text);
+        return `<div class="${cls}" data-idx="${idx}"><span class="col idx">[${idx}]</span><span class="col line">${ln}</span><span class="col text">${text}</span></div>`;
+      })
+      .join('');
+    const head = this.escapeHtml(chunk || '');
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px; }
+    .header { margin: 6px 0 8px; color: var(--vscode-foreground); }
+    .grid { border-top: 1px solid var(--vscode-editorWidget-border); }
+    .row { display: grid; grid-template-columns: 80px 60px 1fr; padding: 2px 6px; border-bottom: 1px solid var(--vscode-editorWidget-border); }
+    .row:nth-child(even) { background: var(--vscode-editorInlayHint-background, transparent); }
+    .row.current { background: var(--vscode-editor-findMatchHighlightBackground, #fffbcc); }
+    .col.idx { color: var(--vscode-descriptionForeground); }
+    .col.line { color: var(--vscode-descriptionForeground); }
+    .col.text { white-space: pre; }
+  </style>
+  <title>Lua Bytecode</title>
+  </head>
+<body>
+  <div class="header">${head}</div>
+  <div class="grid">${rows}</div>
+</body>
+</html>`;
+  }
+
+  private escapeHtml(s: string): string {
+    return s
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+  }
+
+  // New version that understands patched instructions
+  private buildHtml2(
+    chunk: string,
+    pc: number,
+    instr: { index: number; line: number; text: string; patched?: boolean; patchKind?: string; origText?: string }[]
+  ): string {
+    const rows = instr
+      .map((i) => {
+        const cls = i.index === pc ? 'row current' : 'row';
+        const ln = i.line ? String(i.line) : '';
+        const idx = String(i.index);
+        const text = this.escapeHtml(i.text);
+        const badge = i.patched
+          ? `<span class="badge ${i.patchKind === 'step' ? 'step' : 'bp'}">${i.patchKind === 'step' ? '[STEP]' : '[BP]'}</span>`
+          : '';
+        const orig = i.patched && i.origText
+          ? `<span class="orig"> → ${this.escapeHtml(i.origText)}</span>`
+          : '';
+        return `<div class="${cls}" data-idx="${idx}"><span class="col idx">[${idx}]</span><span class="col line">${ln}</span><span class="col text">${badge} ${text}${orig}</span></div>`;
+      })
+      .join('');
+    const head = this.escapeHtml(chunk || '');
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <style>
+    body { font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px; }
+    .header { margin: 6px 0 8px; color: var(--vscode-foreground); }
+    .grid { border-top: 1px solid var(--vscode-editorWidget-border); }
+    .row { display: grid; grid-template-columns: 80px 60px 1fr; padding: 2px 6px; border-bottom: 1px solid var(--vscode-editorWidget-border); }
+    .row:nth-child(even) { background: var(--vscode-editorInlayHint-background, transparent); }
+    .row.current { background: var(--vscode-editor-findMatchHighlightBackground, #fffbcc); }
+    .col.idx { color: var(--vscode-descriptionForeground); }
+    .col.line { color: var(--vscode-descriptionForeground); }
+    .col.text { white-space: pre; }
+    .badge { display: inline-block; margin-right: 6px; padding: 0 4px; border-radius: 3px; font-size: 10px; color: var(--vscode-editor-foreground); background: var(--vscode-editorInlayHint-background, #444); }
+    .badge.bp { background: var(--vscode-charts-red, #c33); color: #fff; }
+    .badge.step { background: var(--vscode-charts-blue, #36f); color: #fff; }
+    .orig { color: var(--vscode-descriptionForeground); }
+  </style>
+  <title>Lua Bytecode</title>
+  </head>
+<body>
+  <div class="header">${head}</div>
+  <div class="grid">${rows}</div>
+</body>
+</html>`;
   }
 }

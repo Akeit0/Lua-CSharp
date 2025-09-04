@@ -24,7 +24,7 @@ static class RpcServer
                 var id = root.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
                 var method = root.GetProperty("method").GetString();
                 var @params = root.TryGetProperty("params", out var p) ? p : default;
-                if(method is "next" or "continue" or "stepIn" or "stepOut")WriteLogToConsole($"<= {method}");
+                if (method is "next" or "continue" or "stepIn" or "stepOut") WriteLogToConsole($"<= {method}");
 
                 switch (method)
                 {
@@ -64,6 +64,9 @@ static class RpcServer
                     case "getGlobals":
                         HandleGetGlobals(id);
                         break;
+                    case "getBytecode":
+                        HandleGetBytecode(id);
+                        break;
                     case "terminate":
                         WriteResponse(id, new { });
                         return;
@@ -93,11 +96,11 @@ static class RpcServer
         Write(payload);
     }
 
-    public static void WriteToConsole(string text,string category="console")
+    public static void WriteToConsole(string text, string category = "console")
     {
         WriteEvent("output", new { category = category, output = text + "\n" });
     }
-    
+
     public static void WriteLogToConsole(string text)
     {
         WriteEvent("output", new { category = "important", output = text + "\n" });
@@ -192,5 +195,17 @@ static class RpcServer
     {
         var globals = LuaDebugSession.Current?.GetGlobals() ?? Array.Empty<object>();
         WriteResponse(id, new { variables = globals });
+    }
+
+    static void HandleGetBytecode(string? id)
+    {
+        var result = LuaDebugSession.Current?.GetBytecodeSnapshot();
+        if (result is null)
+        {
+            WriteResponse(id, error: new { message = "no paused location" });
+            return;
+        }
+
+        WriteResponse(id, result);
     }
 }

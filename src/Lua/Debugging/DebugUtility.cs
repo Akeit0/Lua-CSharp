@@ -5,6 +5,7 @@ namespace Lua.Debugging;
 
 public static class DebugUtility
 {
+    public static readonly Instruction DebugBreakInstruction = new() { OpCode = (OpCode)40 };
     public static Instruction PatchInstruction(Prototype proto, int instructionIndex, Instruction instruction)
     {
         if (instructionIndex < 0 || instructionIndex >= proto.Code.Length)
@@ -17,7 +18,7 @@ public static class DebugUtility
 
     public static Instruction PatchDebugInstruction(Prototype proto, int instructionIndex)
     {
-        return PatchInstruction(proto, instructionIndex, new() { OpCode = (OpCode)40 });
+        return PatchInstruction(proto, instructionIndex, DebugBreakInstruction);
     }
 
     public static string? GetLocalVariableName(Prototype proto, int registerIndex, int instructionIndex)
