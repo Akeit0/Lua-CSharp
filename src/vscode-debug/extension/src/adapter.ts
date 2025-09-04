@@ -493,6 +493,24 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     });
   });
 </script>`;
+      `
+<script>
+  // Auto-scroll current instruction into view
+  (function() {
+    const scrollToCurrent = () => {
+      const el = document.querySelector('.grid .row.current');
+      if (el && el.scrollIntoView) {
+        try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); }
+        catch { el.scrollIntoView(); }
+      }
+    };
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+      setTimeout(scrollToCurrent, 0);
+    } else {
+      window.addEventListener('DOMContentLoaded', scrollToCurrent, { once: true });
+    }
+  })();
+</script>`;
   }
 
   private escapeHtml(s: string): string {
