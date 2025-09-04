@@ -10,7 +10,7 @@ static class RpcServer
     public static async Task RunAsync()
     {
         // Send an initial output event so the client knows we're alive
-        WriteLogToConsole("Lua.DebugServer ready");
+        WriteLogToConsole("[Lua.DebugServer] ready");
 
         string? line;
         while ((line = await Console.In.ReadLineAsync()) is not null)
@@ -24,6 +24,7 @@ static class RpcServer
                 var id = root.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
                 var method = root.GetProperty("method").GetString();
                 var @params = root.TryGetProperty("params", out var p) ? p : default;
+                if(method is "next" or "continue" or "stepIn" or "stepOut")WriteLogToConsole($"<= {method}");
 
                 switch (method)
                 {

@@ -8,6 +8,7 @@ class MinimalDebugger : IDebugger
     readonly Dictionary<string, List<int>> pending = new();
     readonly Dictionary<string, Prototype> protos = new();
     KeyValuePair<(Prototype proto, int index), Instruction>? stepBreak;
+    LuaState? lastThread;
     readonly object sync = new();
 
     enum StepMode { None, In, Out }
@@ -60,6 +61,7 @@ class MinimalDebugger : IDebugger
 
     public Instruction HandleDebugBreak(LuaState thread, int pc, LuaClosure closure)
     {
+        lastThread = thread;
         var proto = closure.Proto;
         var key = (proto, pc);
         Instruction oldInstruction;
@@ -225,16 +227,55 @@ class MinimalDebugger : IDebugger
         DeleteStepBreak();
         // Clear any previous temp step patches
         if (pc < 0 || pc >= proto.LineInfo.Length) return false;
+
+        var currentInstruction = proto.Code[pc];
+        if (currentInstruction.OpCode == (OpCode)40)
+        {
+            currentInstruction = breakpoints[(proto, pc)];
+        }
+
+        var nextPc = pc + 1;
+        var state = this.lastThread!;
+        var stack = state.Stack.AsSpan();
+        int frameBase = state.GetCurrentFrame().Base;
+        switch (currentInstruction.OpCode)
+        {
+            case OpCode.Jmp: nextPc += currentInstruction.SBx; break;
+            case OpCode.ForPrep: nextPc += currentInstruction.SBx; break;
+            case OpCode.TForLoop:
+                {
+                    var forState = stack[currentInstruction.A + frameBase + 1];
+                    if (forState.Type != LuaValueType.Nil)
+                    {
+                        nextPc += currentInstruction.SBx;
+                    }
+
+                    break;
+                }
+            case OpCode.ForLoop:
+                var limit = stack[currentInstruction.A + frameBase + 1].Read<double>();
+                var step = stack[currentInstruction.A + frameBase + 2].Read<double>();
+                var index = stack[currentInstruction.A + frameBase].Read<double>() + step;
+
+                if (step >= 0 ? index <= limit : limit <= index)
+                {
+                    nextPc += currentInstruction.SBx;
+                }
+
+                break;
+            case OpCode.Return:
+                return false;
+        }
+
         var currentLine = proto.LineInfo[pc];
-        for (int i = pc + 1; i < proto.LineInfo.Length; i++)
+        for (int i = nextPc; i < proto.LineInfo.Length; i++)
         {
             if (proto.LineInfo[i] != currentLine)
             {
                 var key = (proto, i);
-                Instruction oldInstruction;
                 lock (sync)
                 {
-                    if (!breakpoints.TryGetValue(key, out oldInstruction))
+                    if (!breakpoints.TryGetValue(key, out var oldInstruction))
                     {
                         // Patch the step trap and store the original instruction in the breakpoint map
                         oldInstruction = DebugUtility.PatchDebugInstruction(proto, i);
