@@ -74,7 +74,7 @@ sealed class LuaDebugSession
 
         var state = LuaState.Create();
         state.Platform = state.Platform with { StandardIO = new DebugIO() };
-        state.OpenBasicLibrary();
+        state.OpenStandardLibraries();
         state.Debugger = debugger;
         this.state = state;
         // if (stopOnEntry)
@@ -148,11 +148,80 @@ sealed class LuaDebugSession
 
         if (publishReason is not null)
         {
-            RpcServer.Publish("stopped", new { reason = publishReason, threadId = 1, file, line });
+            // Try to resolve to an absolute filesystem path using cwd and package.path
+            var resolved = s?.ResolveSourcePath(file) ?? file;
+            RpcServer.Publish("stopped", new { reason = publishReason, threadId = 1, file = resolved, line });
         }
 
         RpcServer.Publish("wait", new { reason = "started", threadId = 1 });
         toWait.Wait();
+    }
+
+    string? ResolveSourcePath(string chunk)
+    {
+        try
+        {
+            if (string.IsNullOrWhiteSpace(chunk)) return chunk;
+            chunk = chunk.Trim();
+            // If already an absolute path and exists, return
+            if (Path.IsPathRooted(chunk) && File.Exists(chunk)) return Path.GetFullPath(chunk);
+
+            // Try CWD + chunk
+            var cwd = Directory.GetCurrentDirectory();
+            var direct = Path.Combine(cwd, chunk);
+            if (File.Exists(direct)) return Path.GetFullPath(direct);
+
+            // Derive candidate base names
+            var withoutExt = Path.HasExtension(chunk) ? Path.ChangeExtension(chunk, null) ?? chunk : chunk;
+            string modDots = withoutExt.Replace('\\', '.').Replace('/', '.');
+            string modSlashes = modDots.Replace('.', Path.DirectorySeparatorChar);
+
+            // Read package.path if available
+            var patterns = new List<string>();
+            try
+            {
+                if (state!.Environment["package"].TryRead<LuaTable>(out var pkg))
+                {
+                    var pathValue = pkg["path"].ToString();
+                    if (!string.IsNullOrEmpty(pathValue))
+                    {
+                        patterns.AddRange(pathValue.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+                    }
+                }
+            }
+            catch { }
+
+            if (patterns.Count == 0)
+            {
+                patterns.Add("?.lua");
+                patterns.Add("?/init.lua");
+            }
+
+            foreach (var pat in patterns)
+            {
+                string Apply(string name)
+                {
+                    var replaced = pat.Replace("?", name);
+                    if (!Path.IsPathRooted(replaced)) replaced = Path.Combine(cwd, replaced);
+                    return replaced;
+                }
+
+                var c1 = Apply(modDots.Replace('.', Path.DirectorySeparatorChar));
+                if (File.Exists(c1)) return Path.GetFullPath(c1);
+
+                var c2 = Apply(modSlashes);
+                if (File.Exists(c2)) return Path.GetFullPath(c2);
+
+                var c3 = Apply(withoutExt);
+                if (File.Exists(c3)) return Path.GetFullPath(c3);
+            }
+
+            return chunk;
+        }
+        catch
+        {
+            return chunk;
+        }
     }
 
     public void UpdateStoppedContext(LuaState thread, int pc, LuaClosure closure)

@@ -1,3 +1,4 @@
+local printer = require("printer")
 local x = 2
 local y = 3
 
@@ -12,5 +13,4 @@ for i = 1, 10, 3 do
   x  = x + 1
 end
 
-
-print("end")
+printer.print("end")
