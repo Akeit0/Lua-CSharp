@@ -175,6 +175,15 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     return process.cwd();
   }
 
+  // Config
+  private shouldAutoOpenPanel(): boolean {
+    try {
+      return !!vscode.workspace.getConfiguration('luaCsharp').get('bytecodeViewer.openOnStop', false);
+    } catch {
+      return false;
+    }
+  }
+
   private handleHostLine(line: string) {
     try {
       const msg = JSON.parse(line);
@@ -198,9 +207,13 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             this.localsRef = ++this.nextVarRef;
             this.globalsRef = ++this.nextVarRef;
             this.sendEvent(new StoppedEvent(reason, this.threadId));
-            // Update bytecode viewer
-            this.ensurePanel();
-            this.renderBytecode();
+            // Update bytecode viewer if open; otherwise open if configured
+            if (this.panel) {
+              this.renderBytecode();
+            } else if (this.shouldAutoOpenPanel()) {
+              this.ensurePanel();
+              this.renderBytecode();
+            }
             break;
           }
           case 'terminated':
@@ -220,6 +233,21 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
         new OutputEvent(`[lua-csharp] host message parse error: ${e}\n`)
       );
     }
+  }
+
+  // Handle custom requests from VS Code commands
+  protected customRequest(
+    command: string,
+    response: DebugProtocol.Response,
+    _args: any
+  ): void {
+    if (command === 'showBytecode') {
+      this.ensurePanel();
+      this.renderBytecode();
+      this.sendResponse(response);
+      return;
+    }
+    super.customRequest(command, response, _args);
   }
 
   private rpcSend(payload: { method: string; params?: any }) {

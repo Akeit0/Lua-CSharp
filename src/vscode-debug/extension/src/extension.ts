@@ -13,6 +13,22 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.debug.registerDebugAdapterDescriptorFactory(type, new InlineFactory())
   );
+
+  // Command: Show Bytecode Viewer
+  context.subscriptions.push(
+    vscode.commands.registerCommand('lua-csharp.showBytecode', async () => {
+      const ses = vscode.debug.activeDebugSession;
+      if (!ses || ses.type !== type) {
+        vscode.window.showInformationMessage('Start a Lua-CSharp debug session to show bytecode.');
+        return;
+      }
+      try {
+        await ses.customRequest('showBytecode');
+      } catch (e: any) {
+        vscode.window.showErrorMessage(`Show Bytecode failed: ${e?.message ?? e}`);
+      }
+    })
+  );
 }
 
 export function deactivate() {}
@@ -45,4 +61,3 @@ class InlineFactory implements vscode.DebugAdapterDescriptorFactory {
     return new vscode.DebugAdapterInlineImplementation(new LuaCSharpDebugSession());
   }
 }
-
