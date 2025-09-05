@@ -64,6 +64,9 @@ static class RpcServer
                     case "getGlobals":
                         HandleGetGlobals(id);
                         break;
+                    case "getUpvalues":
+                        HandleGetUpvalues(id);
+                        break;
                     case "getInstrBreakpoints":
                         HandleGetInstrBreakpoints(id, @params);
                         break;
@@ -201,6 +204,12 @@ static class RpcServer
     {
         var globals = LuaDebugSession.Current?.GetGlobals() ?? Array.Empty<object>();
         WriteResponse(id, new { variables = globals });
+    }
+
+    static void HandleGetUpvalues(string? id)
+    {
+        var upvalues = LuaDebugSession.Current?.GetUpvalues() ?? Array.Empty<object>();
+        WriteResponse(id, new { variables = upvalues });
     }
 
     static void HandleGetBytecode(string? id)

@@ -12,6 +12,7 @@ sealed class LuaDebugSession
     TaskCompletionSource<bool>? pauseTcs;
     readonly List<(string name, string value)> locals = new();
     readonly List<(string name, string value)> globals = new();
+    readonly List<(string name, string value)> upvalues = new();
     Prototype? lastProto;
     int lastPc;
     bool isSteppingNext;
@@ -208,6 +209,28 @@ sealed class LuaDebugSession
             {
                 /* ignore snapshot errors */
             }
+
+            // Snapshot upvalues for current closure
+            upvalues.Clear();
+            try
+            {
+                var desc = closure.Proto.UpValues;
+                var values = closure.UpValues;
+                var count = Math.Min(desc.Length, values.Length);
+                for (int i = 0; i < count; i++)
+                {
+                    string name;
+                    try { name = desc[i].Name.ToString(); } catch { name = $"upvalue_{i}"; }
+                    if (string.IsNullOrWhiteSpace(name)) name = $"upvalue_{i}";
+                    string value;
+                    try { value = values[i].GetValue().ToString(); } catch { value = string.Empty; }
+                    upvalues.Add((name.Trim(), value));
+                }
+            }
+            catch
+            {
+                /* ignore snapshot errors */
+            }
         }
     }
 
@@ -224,6 +247,14 @@ sealed class LuaDebugSession
         lock (locals)
         {
             return globals.Select(v => new { name = v.name, value = v.value }).Cast<object>().ToArray();
+        }
+    }
+
+    public object[] GetUpvalues()
+    {
+        lock (locals)
+        {
+            return upvalues.Select(v => new { name = v.name, value = v.value }).Cast<object>().ToArray();
         }
     }
 

@@ -1,14 +1,15 @@
-local function add(a, b, c)
-  local d = a + b + c
-  return d
-end
-
 local x = 2
 local y = 3
 
+local function add(i)
+  local z = x + y + i
+  return z
+end
+
 for i = 1, 10, 3 do
-  local z = add(x, y ,i)
+  local z = add(i)
   print("x + y + i:", z)
+  x  = x + 1
 end
 
 

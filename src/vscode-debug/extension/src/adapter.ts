@@ -32,6 +32,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private nextVarRef = 1;
   private localsRef = 0;
   private globalsRef = 0;
+  private upvaluesRef = 0;
   private panel?: vscode.WebviewPanel;
   private lastBytecodeChunk?: string;
 
@@ -206,6 +207,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             // Invalidate previous locals reference and generate a new one for this stop
             this.localsRef = ++this.nextVarRef;
             this.globalsRef = ++this.nextVarRef;
+            this.upvaluesRef = ++this.nextVarRef;
             this.sendEvent(new StoppedEvent(reason, this.threadId));
             // Update bytecode viewer if open; otherwise open if configured
             if (this.panel) {
@@ -322,6 +324,11 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           expensive: false,
         },
         {
+          name: 'Upvalues',
+          variablesReference: this.upvaluesRef,
+          expensive: false,
+        },
+        {
           name: 'Globals',
           variablesReference: this.globalsRef,
           expensive: true,
@@ -360,6 +367,20 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getGlobals error: ${err}\n`));
+          response.body = { variables: [] };
+          this.sendResponse(response);
+        });
+    } else if (args.variablesReference === this.upvaluesRef) {
+      this.rpcCall('getUpvalues')
+        .then((res) => {
+          const vars = (res?.variables ?? []) as { name: string; value: string }[];
+          response.body = {
+            variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
+          };
+          this.sendResponse(response);
+        })
+        .catch((err) => {
+          this.sendEvent(new OutputEvent(`[lua-csharp] getUpvalues error: ${err}\n`));
           response.body = { variables: [] };
           this.sendResponse(response);
         });
