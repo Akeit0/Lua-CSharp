@@ -67,6 +67,12 @@ static class RpcServer
                     case "getUpvalues":
                         HandleGetUpvalues(id);
                         break;
+                    case "setLocal":
+                        HandleSetLocal(id, @params);
+                        break;
+                    case "setUpvalue":
+                        HandleSetUpvalue(id, @params);
+                        break;
                     case "getInstrBreakpoints":
                         HandleGetInstrBreakpoints(id, @params);
                         break;
@@ -210,6 +216,36 @@ static class RpcServer
     {
         var upvalues = LuaDebugSession.Current?.GetUpvalues() ?? Array.Empty<object>();
         WriteResponse(id, new { variables = upvalues });
+    }
+
+    static void HandleSetLocal(string? id, JsonElement @params)
+    {
+        var name = @params.GetProperty("name").GetString() ?? string.Empty;
+        var value = @params.GetProperty("value").GetString() ?? string.Empty;
+        var res = LuaDebugSession.Current?.SetLocal(name, value) ?? (false, null);
+        if (!res.ok || res.value is null)
+        {
+            WriteResponse(id, error: new { message = $"failed to set local '{name}'" });
+        }
+        else
+        {
+            WriteResponse(id, new { value = res.value });
+        }
+    }
+
+    static void HandleSetUpvalue(string? id, JsonElement @params)
+    {
+        var name = @params.GetProperty("name").GetString() ?? string.Empty;
+        var value = @params.GetProperty("value").GetString() ?? string.Empty;
+        var res = LuaDebugSession.Current?.SetUpvalue(name, value) ?? (false, null);
+        if (!res.ok || res.value is null)
+        {
+            WriteResponse(id, error: new { message = $"failed to set upvalue '{name}'" });
+        }
+        else
+        {
+            WriteResponse(id, new { value = res.value });
+        }
     }
 
     static void HandleGetBytecode(string? id)

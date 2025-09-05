@@ -51,6 +51,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response.body.supportsConfigurationDoneRequest = true;
     response.body.supportsRestartRequest = true;
     response.body.supportsTerminateRequest = true;
+    response.body.supportsSetVariable = true;
     this.sendResponse(response);
     this.sendEvent(new InitializedEvent());
   }
@@ -388,6 +389,43 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       response.body = { variables: [] };
       this.sendResponse(response);
     }
+  }
+
+  protected setVariableRequest(
+    response: DebugProtocol.SetVariableResponse,
+    args: DebugProtocol.SetVariableArguments
+  ): void {
+    const name = args.name;
+    const value = args.value ?? '';
+    if (args.variablesReference === this.localsRef) {
+      this.rpcCall('setLocal', { name, value })
+        .then((res) => {
+          response.body = { value: String(res?.value ?? value) } as any;
+          this.sendResponse(response);
+        })
+        .catch((err) => {
+          this.sendEvent(new OutputEvent(`[lua-csharp] setLocal error: ${err}\n`));
+          response.body = { value } as any;
+          this.sendResponse(response);
+        });
+      return;
+    }
+    if (args.variablesReference === this.upvaluesRef) {
+      this.rpcCall('setUpvalue', { name, value })
+        .then((res) => {
+          response.body = { value: String(res?.value ?? value) } as any;
+          this.sendResponse(response);
+        })
+        .catch((err) => {
+          this.sendEvent(new OutputEvent(`[lua-csharp] setUpvalue error: ${err}\n`));
+          response.body = { value } as any;
+          this.sendResponse(response);
+        });
+      return;
+    }
+    // Not supported for other scopes
+    response.body = { value } as any;
+    this.sendResponse(response);
   }
 
   // Bytecode webview helpers

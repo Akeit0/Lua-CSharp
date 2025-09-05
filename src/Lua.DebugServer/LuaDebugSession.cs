@@ -258,6 +258,102 @@ sealed class LuaDebugSession
         }
     }
 
+    public (bool ok, string? value) SetLocal(string name, string valueText)
+    {
+        lock (locals)
+        {
+            if (state is null || lastProto is null) return (false, null);
+            var thread = state;
+            var f = thread.GetCurrentFrame();
+            var baseIndex = f.Base;
+            var stack = thread.Stack.AsSpan();
+            var pc = lastPc;
+
+            for (int i = 0; i < lastProto.MaxStackSize && (baseIndex + i) < stack.Length; i++)
+            {
+                var n = DebugUtility.GetLocalVariableName(lastProto, i, pc);
+                if (string.IsNullOrWhiteSpace(n)) continue;
+                n = n.Trim();
+                if (string.Equals(n, name, StringComparison.Ordinal))
+                {
+                    if (!TryParseLuaValue(valueText, out var v)) return (false, null);
+                    stack[baseIndex + i] = v;
+                    string s;
+                    try { s = stack[baseIndex + i].ToString(); } catch { s = valueText; }
+                    return (true, s);
+                }
+            }
+
+            return (false, null);
+        }
+    }
+
+    public (bool ok, string? value) SetUpvalue(string name, string valueText)
+    {
+        lock (locals)
+        {
+            if (state is null) return (false, null);
+            var thread = state;
+            var f = thread.GetCurrentFrame();
+            if (f.Function is not LuaClosure clo) return (false, null);
+
+            var desc = clo.Proto.UpValues;
+            var values = clo.UpValues;
+            var count = Math.Min(desc.Length, values.Length);
+            for (int i = 0; i < count; i++)
+            {
+                string n;
+                try { n = desc[i].Name.ToString(); } catch { n = $"upvalue_{i}"; }
+                if (string.IsNullOrWhiteSpace(n)) n = $"upvalue_{i}";
+                n = n.Trim();
+                if (string.Equals(n, name, StringComparison.Ordinal))
+                {
+                    if (!TryParseLuaValue(valueText, out var v)) return (false, null);
+                    try { values[i].SetValue(v); }
+                    catch { return (false, null); }
+                    string s;
+                    try { s = values[i].GetValue().ToString(); } catch { s = valueText; }
+                    return (true, s);
+                }
+            }
+
+            return (false, null);
+        }
+    }
+
+    static bool TryParseLuaValue(string text, out LuaValue value)
+    {
+        text = text ?? string.Empty;
+        // bool
+        if (string.Equals(text, "true", StringComparison.OrdinalIgnoreCase))
+        {
+            value = true;
+            return true;
+        }
+
+        if (string.Equals(text, "false", StringComparison.OrdinalIgnoreCase))
+        {
+            value = false;
+            return true;
+        }
+
+        // number
+        if (double.TryParse(text, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d))
+        {
+            value = d;
+            return true;
+        }
+
+        // string (strip optional quotes)
+        if ((text.StartsWith("\"") && text.EndsWith("\"")) || (text.StartsWith("'") && text.EndsWith("'")))
+        {
+            text = text.Substring(1, Math.Max(0, text.Length - 2));
+        }
+
+        value = text;
+        return true;
+    }
+
     public (Prototype? proto, int pc) GetPausedLocation()
     {
         lock (locals)
