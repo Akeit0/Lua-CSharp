@@ -135,12 +135,29 @@ static class RpcServer
     static void HandleSetBreakpoints(string? id, JsonElement @params)
     {
         var source = @params.GetProperty("source").GetString() ?? string.Empty;
-        var lines = new List<int>();
-        if (@params.TryGetProperty("lines", out var arr))
+        var list = new List<(int line, string? condition, string? hitCondition, string? logMessage)>();
+        if (@params.TryGetProperty("breakpoints", out var bpsArr))
+        {
+            foreach (var el in bpsArr.EnumerateArray())
+            {
+                var line = el.GetProperty("line").GetInt32();
+                string? cond = null;
+                if (el.TryGetProperty("condition", out var cEl) && cEl.ValueKind == JsonValueKind.String)
+                    cond = cEl.GetString();
+                string? hit = null;
+                if (el.TryGetProperty("hitCondition", out var hEl) && hEl.ValueKind == JsonValueKind.String)
+                    hit = hEl.GetString();
+                string? log = null;
+                if (el.TryGetProperty("logMessage", out var lEl) && lEl.ValueKind == JsonValueKind.String)
+                    log = lEl.GetString();
+                list.Add((line, cond, hit, log));
+            }
+        }
+        else if (@params.TryGetProperty("lines", out var arr))
         {
             foreach (var el in arr.EnumerateArray())
                 if (el.TryGetInt32(out var l))
-                    lines.Add(l);
+                    list.Add((l, null, null, null));
         }
 
         if (LuaDebugSession.Current is null)
@@ -148,8 +165,8 @@ static class RpcServer
             LuaDebugSession.Current = new LuaDebugSession();
         }
 
-        LuaDebugSession.Current.SetBreakpoints(source, lines);
-        WriteResponse(id, new { breakpoints = lines.Select(l => new { verified = true, line = l }).ToArray() });
+        LuaDebugSession.Current.SetBreakpoints(source, list);
+        WriteResponse(id, new { breakpoints = list.Select(l => new { verified = true, line = l.line }).ToArray() });
     }
 
     static async Task HandleLaunchAsync(string? id, JsonElement @params)

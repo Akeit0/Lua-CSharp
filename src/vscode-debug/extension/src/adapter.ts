@@ -51,6 +51,9 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response.body.supportsConfigurationDoneRequest = true;
     response.body.supportsRestartRequest = true;
     response.body.supportsTerminateRequest = true;
+    response.body.supportsConditionalBreakpoints = true;
+    response.body.supportsHitConditionalBreakpoints = true;
+    response.body.supportsLogPoints = true;
     response.body.supportsSetVariable = true;
     this.sendResponse(response);
     this.sendEvent(new InitializedEvent());
@@ -163,11 +166,16 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response: DebugProtocol.SetBreakpointsResponse,
     args: DebugProtocol.SetBreakpointsArguments
   ): void {
-    const lines = (args.breakpoints ?? []).map((b) => b.line);
+    const breakpoints = (args.breakpoints ?? []).map((b) => ({
+      line: b.line,
+      condition: (b as any).condition,
+      hitCondition: (b as any).hitCondition,
+      logMessage: (b as any).logMessage,
+    }));
     const sourcePath = args.source?.path ?? '';
-    this.rpcSend({ method: 'setBreakpoints', params: { source: sourcePath, lines } });
+    this.rpcSend({ method: 'setBreakpoints', params: { source: sourcePath, breakpoints } });
     response.body = {
-      breakpoints: lines.map((l) => ({ verified: true, line: l })),
+      breakpoints: breakpoints.map((bp) => ({ verified: true, line: bp.line })),
     } as any;
     this.sendResponse(response);
   }

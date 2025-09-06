@@ -5,6 +5,8 @@ using Lua.Runtime;
 class MinimalDebugger : IDebugger
 {
     readonly Dictionary<(Prototype, int), Instruction> breakpoints = new();
+    readonly Dictionary<(Prototype, int), (string? cond, string? hit, string? log)> breakpointOptions = new();
+    readonly Dictionary<(Prototype, int), int> breakpointHitCounts = new();
     readonly Dictionary<string, List<int>> pending = new();
     readonly Dictionary<string, Prototype> protos = new();
     readonly Dictionary<string, HashSet<int>> instrPending = new(StringComparer.Ordinal);
@@ -33,7 +35,7 @@ class MinimalDebugger : IDebugger
             if (set != null)
             {
                 ClearBreakpoints(proto.ChunkName);
-                foreach (var line in set) SetBreakPointAtLine(proto, line);
+                foreach (var kv in set) SetBreakPointAtLine(proto, kv.Key, kv.Value.condition, kv.Value.hit, kv.Value.log);
             }
         }
 
@@ -56,7 +58,7 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public void SetBreakPointAtLine(string chunkName, int line)
+    public void SetBreakPointAtLine(string chunkName, int line, string? condition = null, string? hit = null, string? log = null)
     {
         if (!chunkName.StartsWith('@')) chunkName = "@" + chunkName;
         lock (sync)
@@ -70,7 +72,7 @@ class MinimalDebugger : IDebugger
                 pending[chunkName] = new List<int> { line };
             }
 
-            if (protos.TryGetValue(chunkName, out var proto)) SetBreakPointAtLine(proto, line);
+            if (protos.TryGetValue(chunkName, out var proto)) SetBreakPointAtLine(proto, line, condition, hit, log);
         }
     }
 
@@ -118,7 +120,8 @@ class MinimalDebugger : IDebugger
                     foreach (var kv in snap)
                     {
                         ClearBreakpoints(kv.Key);
-                        foreach (var line in kv.Value) SetBreakPointAtLine(kv.Key, line);
+                        foreach (var bp in kv.Value)
+                            SetBreakPointAtLine(kv.Key, bp.Key, bp.Value.condition, bp.Value.hit, bp.Value.log);
                     }
                 }
             }
@@ -135,16 +138,45 @@ class MinimalDebugger : IDebugger
             //     return oldInstruction;
             // }
 
-            // Capture locals and pause until a 'continue' RPC arrives
-            LuaDebugSession.Current?.UpdateStoppedContext(thread, pc, closure);
-
-            var file = proto.ChunkName.TrimStart('@');
+            // Evaluate conditional breakpoint and hit counts, and handle logpoints
+            bool shouldPause = true;
+            (string? cond, string? hit, string? log) opts;
+            lock (sync) { breakpointOptions.TryGetValue(key, out opts); }
+            // hit count
+            int hitCount = 0;
+            lock (sync)
             {
-                // line is defined above
+                if (!breakpointHitCounts.TryGetValue(key, out hitCount)) hitCount = 0;
+                hitCount++;
+                breakpointHitCounts[key] = hitCount;
+            }
+            if (!string.IsNullOrWhiteSpace(opts.hit))
+            {
+               // RpcServer .WriteLogToConsole($"[Lua.DebugServer] Evaluating hit condition '{opts.hit}' at hit count {hitCount}");
+                try { if (!EvaluateHitCondition(hitCount, opts.hit!)) shouldPause = false; }
+                catch (Exception ex) { RpcServer.WriteToConsole($"[Lua.DebugServer] hitCondition error: {ex.Message}\n", "stderr"); shouldPause = false; }
+            }
+            if (shouldPause && !string.IsNullOrWhiteSpace(opts.cond))
+            {
+                //RpcServer .WriteLogToConsole($"[Lua.DebugServer] Evaluating condition '{opts.cond}'");
+                try { shouldPause = EvaluateCondition(thread, pc, closure, opts.cond!); }
+                catch (Exception ex) { RpcServer.WriteToConsole($"[Lua.DebugServer] condition error: {ex.Message}\n", "stderr"); shouldPause = false; }
+            }
+            // logpoint: if message is present, log and do not pause
+            if (shouldPause&&!string.IsNullOrWhiteSpace(opts.log))
+            {
+                //RpcServer .WriteLogToConsole($"[Lua.DebugServer] Hit logpoint: {opts.log}");
+                try { LogMessage(thread, pc, closure, opts.log!); }
+                catch (Exception ex) { RpcServer.WriteToConsole($"[Lua.DebugServer] logpoint error: {ex.Message}\n", "stderr"); }
+                shouldPause = false;
+            }
+
+            if (shouldPause)
+            {
+                // Capture locals and pause until a 'continue' RPC arrives
+                LuaDebugSession.Current?.UpdateStoppedContext(thread, pc, closure);
+                var file = proto.ChunkName.TrimStart('@');
                 var line = proto.LineInfo[pc];
-
-
-                // Pause
                 LuaDebugSession.PauseForBreakpoint(file, line);
             }
 
@@ -157,24 +189,24 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public void SetBreakPointAtLine(Prototype proto, int line)
+    public void SetBreakPointAtLine(Prototype proto, int line, string? condition = null, string? hit = null, string? log = null)
     {
         for (int i = 0; i < proto.LineInfo.Length; i++)
         {
             if (proto.LineInfo[i] == line)
             {
-                SetBreakpoint(proto, i);
+                SetBreakpoint(proto, i, condition, hit, log);
                 return;
             }
         }
 
         foreach (var p in proto.ChildPrototypes)
         {
-            SetBreakPointAtLine(p, line);
+            SetBreakPointAtLine(p, line, condition, hit, log);
         }
     }
 
-    void SetBreakpoint(Prototype proto, int instructionIndex)
+    void SetBreakpoint(Prototype proto, int instructionIndex, string? condition = null, string? hit = null, string? log = null)
     {
         if (instructionIndex < 0 || instructionIndex >= proto.Code.Length)
             throw new ArgumentOutOfRangeException(nameof(instructionIndex));
@@ -191,6 +223,12 @@ class MinimalDebugger : IDebugger
             {
                 var oldInstruction = DebugUtility.PatchDebugInstruction(proto, instructionIndex);
                 breakpoints[key] = oldInstruction;
+                breakpointOptions[key] = (condition, hit, log);
+                breakpointHitCounts[key] = 0;
+            }
+            else
+            {
+                breakpointOptions[key] = (condition, hit, log);
             }
         }
     }
@@ -274,6 +312,8 @@ class MinimalDebugger : IDebugger
                         {
                             DebugUtility.PatchInstruction(proto, i, old);
                             breakpoints.Remove(key);
+                            breakpointOptions.Remove(key);
+                            breakpointHitCounts.Remove(key);
                         }
                     }
                 }
@@ -500,13 +540,7 @@ class MinimalDebugger : IDebugger
     {
         lock (sync)
         {
-            if (stepBreak is { } sb)
-            {
-                DebugUtility.PatchInstruction(sb.Key.proto, sb.Key.index, sb.Value);
-                stepBreak = null;
-            }
-
-            SetStepToNextLine(proto, pc, true);
+            SetStepToNextLine(proto, pc, stepIn:true);
             stepMode = StepMode.In;
             //RpcServer .WriteToConsole($"[Lua.DebugServer] Step-In armed");
         }
@@ -562,5 +596,205 @@ class MinimalDebugger : IDebugger
         }
 
         return proto.Code[index];
+    }
+
+    bool EvaluateCondition(LuaState thread, int pc, LuaClosure closure, string condition)
+    {
+        condition = condition.Trim();
+        if (condition.Length == 0) return true;
+
+        // Simple forms: name, name == literal, name ~= literal, name != literal, numeric comparisons
+        // Extract lhs, op, rhs
+        string ident = condition;
+        string? op = null;
+        string? rhs = null;
+        var ops = new[] { "==", "~=", "!=", ">=", "<=", ">", "<" };
+        foreach (var o in ops)
+        {
+            var idx = condition.IndexOf(o, StringComparison.Ordinal);
+            if (idx > 0)
+            {
+                ident = condition.Substring(0, idx).Trim();
+                op = o;
+                rhs = condition.Substring(idx + o.Length).Trim();
+                break;
+            }
+        }
+
+        //RpcServer .WriteLogToConsole($"[Lua.DebugServer] Evaluating condition: ident='{ident}' op='{op}' rhs='{rhs}'");
+        var val = GetValueByName(thread, pc, closure, ident);
+        if (val is null)
+        {
+            // unknown name -> do not break
+            return false;
+        }
+
+        if (op is null)
+        {
+            // truthiness: false or nil are false, everything else true
+            try
+            {
+                if (val.Value.Type.ToString() == "Nil") return false;
+            }
+            catch { }
+            if (val.Value.TryRead<bool>(out var b)) return b;
+            return true;
+        }
+
+        // Parse RHS literal
+        if (rhs is null) return false;
+        object? lit = null;
+        if ((rhs.StartsWith("\"") && rhs.EndsWith("\"")) || (rhs.StartsWith("'") && rhs.EndsWith("'")))
+        {
+            lit = rhs.Substring(1, Math.Max(0, rhs.Length - 2));
+        }
+        else if (string.Equals(rhs, "true", StringComparison.OrdinalIgnoreCase)) lit = true;
+        else if (string.Equals(rhs, "false", StringComparison.OrdinalIgnoreCase)) lit = false;
+        else if (string.Equals(rhs, "nil", StringComparison.OrdinalIgnoreCase)) lit = null;
+        else if (double.TryParse(rhs, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d)) lit = d;
+        else lit = rhs; // bare string
+
+        // Compare
+        if (lit is double nd)
+        {
+            if (!val.Value.TryRead<double>(out var vd)) return false;
+            return op switch
+            {
+                "==" => vd == nd,
+                "!=" or "~=" => vd != nd,
+                ">" => vd > nd,
+                "<" => vd < nd,
+                ">=" => vd >= nd,
+                "<=" => vd <= nd,
+                _ => false
+            };
+        }
+        if (lit is bool nb)
+        {
+            if (!val.Value.TryRead<bool>(out var vb)) return false;
+            return op switch
+            {
+                "==" => vb == nb,
+                "!=" or "~=" => vb != nb,
+                _ => false
+            };
+        }
+        if (lit is null)
+        {
+            // compare with nil based on ToString/Type
+            try { if (val.Value.Type.ToString() == "Nil") return op is "=="; else return op is "!=" or "~="; }
+            catch { return false; }
+        }
+        // string
+        var ls = lit.ToString() ?? string.Empty;
+        if (!val.Value.TryRead<string>(out var vs)) vs = val.Value.ToString();
+        return op switch
+        {
+            "==" => string.Equals(vs, ls, StringComparison.Ordinal),
+            "!=" or "~=" => !string.Equals(vs, ls, StringComparison.Ordinal),
+            _ => false
+        };
+    }
+
+    LuaValue? GetValueByName(LuaState thread, int pc, LuaClosure closure, string name)
+    {
+        name = name.Trim();
+        if (name.Length == 0) return null;
+        var proto = closure.Proto;
+        var f = thread.GetCurrentFrame();
+        var baseIndex = f.Base;
+        var stack = thread.Stack.AsSpan();
+        for (int i = 0; i < proto.MaxStackSize && (baseIndex + i) < stack.Length; i++)
+        {
+            var n = DebugUtility.GetLocalVariableName(proto, i, pc);
+            if (!string.IsNullOrEmpty(n) && string.Equals(n.Trim(), name, StringComparison.Ordinal))
+            {
+                return stack[baseIndex + i];
+            }
+        }
+        // upvalues
+        try
+        {
+            var desc = closure.Proto.UpValues;
+            var values = closure.UpValues;
+            var count = Math.Min(desc.Length, values.Length);
+            for (int i = 0; i < count; i++)
+            {
+                string n = desc[i].Name.ToString();
+                if (!string.IsNullOrEmpty(n) && string.Equals(n.Trim(), name, StringComparison.Ordinal))
+                {
+                    return values[i].GetValue();
+                }
+            }
+        }
+        catch { }
+
+        // globals
+        try
+        {
+            foreach (var kv in thread.Environment)
+            {
+                if (kv.Key.TryRead<string>(out var n) && string.Equals(n?.Trim(), name, StringComparison.Ordinal))
+                {
+                    return kv.Value;
+                }
+            }
+        }
+        catch { }
+        return null;
+    }
+
+    bool EvaluateHitCondition(int hitCount, string expr)
+    {
+        expr = expr.Trim();
+        if (int.TryParse(expr, out var n)) return hitCount == n;
+        string[] ops = new[] { ">=", "<=", "==", "!=", ">", "<" };
+        foreach (var op in ops)
+        {
+            var idx = expr.IndexOf(op, StringComparison.Ordinal);
+            if (idx > 0)
+            {
+                var rhsText = expr[(idx + op.Length)..].Trim();
+                if (!int.TryParse(rhsText, out var rhs)) return false;
+                return op switch
+                {
+                    ">=" => hitCount >= rhs,
+                    "<=" => hitCount <= rhs,
+                    "==" => hitCount == rhs,
+                    "!=" => hitCount != rhs,
+                    ">" => hitCount > rhs,
+                    "<" => hitCount < rhs,
+                    _ => false,
+                };
+            }
+        }
+        return false;
+    }
+
+    void LogMessage(LuaState thread, int pc, LuaClosure closure, string template)
+    {
+        // Replace {name} with value from locals/upvalues/globals
+        var sb = new System.Text.StringBuilder();
+        for (int i = 0; i < template.Length; )
+        {
+            var c = template[i];
+            if (c == '{')
+            {
+                var j = template.IndexOf('}', i + 1);
+                if (j > i + 1)
+                {
+                    var name = template.Substring(i + 1, j - i - 1).Trim();
+                    var val = GetValueByName(thread, pc, closure, name);
+                    string text;
+                    if (val is null) text = "nil";
+                    else { try { text = val.Value.ToString(); } catch { text = ""; } }
+                    sb.Append(text);
+                    i = j + 1;
+                    continue;
+                }
+            }
+            sb.Append(c); i++;
+        }
+        RpcServer.WriteToConsole(sb.ToString(), "stdout");
     }
 }

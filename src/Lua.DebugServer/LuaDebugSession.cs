@@ -20,11 +20,11 @@ sealed class LuaDebugSession
 
     int stepDepth;
 
-    // Desired user breakpoints by chunk, updated from RPC thread, applied on VM thread at stop/register
-    readonly Dictionary<string, HashSet<int>> desiredBps = new(StringComparer.Ordinal);
+    // Desired user breakpoints by chunk with options (condition, hitCondition, logMessage)
+    readonly Dictionary<string, Dictionary<int, (string? condition, string? hit, string? log)>> desiredBps = new(StringComparer.Ordinal);
     bool bpDirty;
 
-    public void SetBreakpoints(string source, List<int> lines)
+    public void SetBreakpoints(string source, List<(int line, string? condition, string? hitCondition, string? logMessage)> breakpoints)
     {
         EnsureDebugger();
         // Normalize chunk name
@@ -32,34 +32,37 @@ sealed class LuaDebugSession
         source = "@" + source.Replace("\\", "/");
         lock (locals)
         {
-            desiredBps[source] = new HashSet<int>(lines);
+            var map = new Dictionary<int, (string? condition, string? hit, string? log)>();
+            foreach (var bp in breakpoints)
+                map[bp.line] = (bp.condition, bp.hitCondition, bp.logMessage);
+            desiredBps[source] = map;
             bpDirty = true;
         }
     }
 
     // Called from VM thread while paused
-    public (bool dirty, Dictionary<string, HashSet<int>> snapshot) SnapshotDesiredBreakpoints()
+    public (bool dirty, Dictionary<string, Dictionary<int, (string? condition, string? hit, string? log)>> snapshot) SnapshotDesiredBreakpoints()
     {
         lock (locals)
         {
             if (!bpDirty)
-                return (false, new Dictionary<string, HashSet<int>>());
-            var snap = new Dictionary<string, HashSet<int>>(desiredBps.Count, desiredBps.Comparer);
+                return (false, new Dictionary<string, Dictionary<int, (string? condition, string? hit, string? log)>>());
+            var snap = new Dictionary<string, Dictionary<int, (string? condition, string? hit, string? log)>>(desiredBps.Count, desiredBps.Comparer);
             foreach (var kv in desiredBps)
-                snap[kv.Key] = new HashSet<int>(kv.Value);
+                snap[kv.Key] = new Dictionary<int, (string? condition, string? hit, string? log)>(kv.Value);
             bpDirty = false;
             return (true, snap);
         }
     }
 
     // Non-destructive read for a single chunk (used in RegisterPrototype)
-    public HashSet<int>? GetDesiredBreakpointsForChunk(string chunkName)
+    public Dictionary<int, (string? condition, string? hit, string? log)>? GetDesiredBreakpointsForChunk(string chunkName)
     {
         lock (locals)
         {
             if (desiredBps.TryGetValue(chunkName, out var set))
             {
-                return new HashSet<int>(set);
+                return new Dictionary<int, (string? condition, string? hit, string? log)>(set);
             }
 
             return null;
@@ -521,7 +524,7 @@ sealed class LuaDebugSession
 
     public void StepIn()
     {
-        if (debugger is null) return;
+        if (debugger is null || lastProto is null) return;
         stepDepth = lastDepth;
         debugger.StartStepIn(lastProto, lastPc);
     }
