@@ -508,7 +508,16 @@ sealed class LuaDebugSession
                 try { text = instruction.ToString(); }
                 catch { text = instruction.Value.ToString(); }
 
-                instructions.Add(new { index = i, line, text });
+                // Enrich with child prototype index for Closure opcodes
+                if (instruction.OpCode == OpCode.Closure)
+                {
+                    int childIndex = instruction.Bx;
+                    instructions.Add(new { index = i, line, text, childIndex });
+                }
+                else
+                {
+                    instructions.Add(new { index = i, line, text });
+                }
             }
 
             // Best-effort metadata
@@ -596,6 +605,162 @@ sealed class LuaDebugSession
         }
     }
 
+    public object[] GetLocalsForFrame(int frameId)
+    {
+        var ctx = GetFrameContext(frameId);
+        if (ctx.thread is null || ctx.proto is null || ctx.index < 0) return Array.Empty<object>();
+        var list = new List<object>();
+        try
+        {
+            var f = ctx.thread.GetCallStackFrames()[ctx.index];
+            var stack = ctx.thread.Stack.AsSpan();
+            int baseIndex = f.Base;
+            var unique = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < ctx.proto.MaxStackSize && (baseIndex + i) < stack.Length; i++)
+            {
+                var name = DebugUtility.GetLocalVariableName(ctx.proto, i, ctx.pc);
+                if (!string.IsNullOrWhiteSpace(name))
+                {
+                    name = name.Trim();
+                    if (name.Length == 0 || !unique.Add(name)) continue;
+                    string value; try { value = stack[baseIndex + i].ToString(); } catch { value = string.Empty; }
+                    list.Add(new { name, value });
+                }
+            }
+        }
+        catch { }
+        return list.ToArray();
+    }
+
+    public object[] GetUpvaluesForFrame(int frameId)
+    {
+        var ctx = GetFrameContext(frameId);
+        if (ctx.closure is null) return Array.Empty<object>();
+        var list = new List<object>();
+        try
+        {
+            var desc = ctx.closure.Proto.UpValues;
+            var values = ctx.closure.UpValues;
+            var count = Math.Min(desc.Length, values.Length);
+            for (int i = 0; i < count; i++)
+            {
+                string name; try { name = desc[i].Name.ToString(); } catch { name = $"upvalue_{i}"; }
+                if (string.IsNullOrWhiteSpace(name)) name = $"upvalue_{i}";
+                string value; try { value = values[i].GetValue().ToString(); } catch { value = string.Empty; }
+                list.Add(new { name = name.Trim(), value });
+            }
+        }
+        catch { }
+        return list.ToArray();
+    }
+
+    public object? GetBytecodeSnapshotForFrame(int frameId)
+    {
+        var ctx = GetFrameContext(frameId);
+        if (ctx.proto is null) return null;
+        var proto = ctx.proto;
+        var code = proto.Code;
+        var lines = proto.LineInfo;
+        var instructions = new List<object>(code.Length);
+        for (int i = 0; i < code.Length; i++)
+        {
+            int line = (i >= 0 && i < lines.Length) ? lines[i] : 0;
+            var instruction = code[i];
+            if (code[i].OpCode == (OpCode)40 && debugger is not null)
+            {
+                if (debugger.TryGetPatchedOriginal(proto, i, out var original, out _))
+                {
+                    instruction = original;
+                }
+            }
+            string text; try { text = instruction.ToString(); } catch { text = instruction.Value.ToString(); }
+            if (instruction.OpCode == OpCode.Closure)
+            {
+                int childIndex = instruction.Bx;
+                instructions.Add(new { index = i, line, text, childIndex });
+            }
+            else
+            {
+                instructions.Add(new { index = i, line, text });
+            }
+        }
+
+        var constants = new List<string>();
+        try { foreach (var k in proto.Constants) { string v; try { v = k.ToString(); } catch { v = string.Empty; } constants.Add(v); } }
+        catch { }
+        var localsMeta = new List<object>();
+        try { foreach (var lv in proto.LocalVariables) localsMeta.Add(new { lv.Name, lv.StartPc, lv.EndPc }); }
+        catch { }
+        var upvaluesMeta = new List<object>();
+        try { foreach (var uv in proto.UpValues) upvaluesMeta.Add(new { uv.Name, uv.IsLocal, uv.Index }); }
+        catch { }
+        string chunk = proto.ChunkName.TrimStart('@');
+        return new { chunk, pc = ctx.pc, instructions = instructions.ToArray(), constants = constants.ToArray(), locals = localsMeta.ToArray(), upvalues = upvaluesMeta.ToArray() };
+    }
+
+    object SnapshotForPrototype(Prototype proto, int pc)
+    {
+        var code = proto.Code;
+        var lines = proto.LineInfo;
+        var instructions = new List<object>(code.Length);
+        for (int i = 0; i < code.Length; i++)
+        {
+            int line = (i >= 0 && i < lines.Length) ? lines[i] : 0;
+            var instruction = code[i];
+            if (code[i].OpCode == (OpCode)40 && debugger is not null)
+            {
+                if (debugger.TryGetPatchedOriginal(proto, i, out var original, out _))
+                {
+                    instruction = original;
+                }
+            }
+            string text; try { text = instruction.ToString(); } catch { text = instruction.Value.ToString(); }
+            if (instruction.OpCode == OpCode.Closure)
+            {
+                int childIndex = instruction.Bx;
+                instructions.Add(new { index = i, line, text, childIndex });
+            }
+            else
+            {
+                instructions.Add(new { index = i, line, text });
+            }
+        }
+
+        var constants = new List<string>();
+        try { foreach (var k in proto.Constants) { string v; try { v = k.ToString(); } catch { v = string.Empty; } constants.Add(v); } }
+        catch { }
+        var localsMeta = new List<object>();
+        try { foreach (var lv in proto.LocalVariables) localsMeta.Add(new { lv.Name, lv.StartPc, lv.EndPc }); }
+        catch { }
+        var upvaluesMeta = new List<object>();
+        try { foreach (var uv in proto.UpValues) upvaluesMeta.Add(new { uv.Name, uv.IsLocal, uv.Index }); }
+        catch { }
+        string chunk = proto.ChunkName.TrimStart('@');
+        return new { chunk, pc, instructions = instructions.ToArray(), constants = constants.ToArray(), locals = localsMeta.ToArray(), upvalues = upvaluesMeta.ToArray() };
+    }
+
+    (LuaState? thread, Prototype? proto, LuaClosure? closure, int pc, int index) GetFrameContext(int frameId)
+    {
+        var t = lastThread;
+        if (t is null) return (null, null, null, 0, -1);
+        try
+        {
+            var frames = t.GetCallStackFrames();
+            int n = frames.Length;
+            int targetId = Math.Max(1, frameId);
+            int i = n - targetId;
+            if (i < 0 || i >= n) i = n - 1;
+            var f = frames[i];
+            LuaClosure? clo = f.Function as LuaClosure;
+            Prototype? p = clo?.Proto;
+            int pc = 0;
+            if (i == n - 1) pc = Math.Max(0, lastPc);
+            else pc = Math.Max(0, frames[i + 1].CallerInstructionIndex);
+            return (t, p, clo, pc, i);
+        }
+        catch { return (t, null, null, 0, -1); }
+    }
+
     public object[] GetCallStack()
     {
         lock (locals)
@@ -641,6 +806,20 @@ sealed class LuaDebugSession
             return list.ToArray();
         }
     }
+
+    public object? FindPrototypeBytecode(string file, int line)
+    {
+        EnsureDebugger();
+        if (debugger is null) return null;
+        try
+        {
+            var res = debugger.FindPrototypeBySource(file, line);
+            if (res.proto is null) return null;
+            return SnapshotForPrototype(res.proto, res.pc);
+        }
+        catch { return null; }
+    }
+    
 
     public void SetInstructionBreakpoint(string chunkName, int index, bool enabled)
     {

@@ -39,6 +39,12 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private lastBytecodeChunk?: string;
   private pendingBps = new Map<string, { line: number; condition?: string; hitCondition?: string; logMessage?: string }[]>();
   private initializedSent = false;
+  private currentFrameId = 1;
+  private pauseToken = 0;
+  private bytecodeCache = new Map<number, any>();
+  private localsRefByFrame = new Map<number, number>();
+  private upvaluesRefByFrame = new Map<number, number>();
+  private frameByVarRef = new Map<number, { scope: 'locals' | 'upvalues'; frameId: number }>();
 
   public constructor() {
     super();
@@ -283,8 +289,15 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             // Invalidate previous locals reference and generate a new one for this stop
             this.localsRef = ++this.nextVarRef;
             this.globalsRef = ++this.nextVarRef;
-            this.upvaluesRef = ++this.nextVarRef;
-            this.sendEvent(new StoppedEvent(reason, this.threadId));
+          this.upvaluesRef = ++this.nextVarRef;
+          // New pause: reset frame selection and bytecode cache
+          this.currentFrameId = 1;
+          this.pauseToken++;
+          this.bytecodeCache.clear();
+          this.localsRefByFrame.clear();
+          this.upvaluesRefByFrame.clear();
+          this.frameByVarRef.clear();
+          this.sendEvent(new StoppedEvent(reason, this.threadId));
             // Update bytecode viewer if open; otherwise open if configured
             if (this.panel) {
               this.renderBytecode();
@@ -323,6 +336,45 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       this.ensurePanel();
       this.renderBytecode();
       this.sendResponse(response);
+      return;
+    } else if (command === 'findPrototype') {
+      // Proxy to server and return raw snapshot
+      this.rpcCall('findPrototype', { file: _args?.file, line: _args?.line })
+        .then((res) => {
+          (response as any).body = res || {};
+          this.sendResponse(response);
+        })
+        .catch((err) => {
+          (response as any).body = { error: String(err) };
+          this.sendResponse(response);
+        });
+      return;
+    } else if (command === 'showPrototypeAt') {
+      // Find and render prototype snapshot for file+line
+      this.ensurePanel();
+      this.rpcCall('findPrototype', { file: _args?.file, line: _args?.line })
+        .then(async (res) => {
+          if (!res) { this.sendResponse(response); return; }
+          const stackRes = await this.rpcCall('getStack');
+          const frames: { id: number; name: string; file: string; line: number }[] = stackRes?.frames ?? [];
+          const chunk = (res?.chunk as string) || '';
+          const pc = (res?.pc as number) ?? -1;
+          const instr: { index: number; line: number; text: string; childIndex?: number }[] = res?.instructions ?? [];
+          const constants: string[] = res?.constants ?? [];
+          const locals: { name: string; startPc: number; endPc: number }[] = res?.locals ?? [];
+          const upvalues: { name: string; isLocal: boolean; index: number }[] = res?.upvalues ?? [];
+          this.lastBytecodeChunk = chunk;
+          const bpsRes = await this.rpcCall('getInstrBreakpoints', { chunk });
+          const indices: number[] = bpsRes?.breakpoints ?? [];
+          const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices));
+          this.panel!.title = `Lua Bytecode: ${path.basename(chunk || 'function')}`;
+          this.panel!.webview.html = html;
+          this.sendResponse(response);
+        })
+        .catch((err) => {
+          this.sendEvent(new OutputEvent(`[lua-csharp] showPrototypeAt error: ${err}\n`));
+          this.sendResponse(response);
+        });
       return;
     }
     super.customRequest(command, response, _args);
@@ -370,6 +422,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response: DebugProtocol.StackTraceResponse,
     args: DebugProtocol.StackTraceArguments
   ): void {
+    this.sendEvent(new OutputEvent(`[lua-csharp] stackTraceRequest start\n`));
     this.rpcCall('getStack')
       .then((res) => {
         const frames = (res?.frames ?? []) as { id: number; name: string; file: string; line: number }[];
@@ -382,6 +435,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
         }));
         response.body = { stackFrames: sfs, totalFrames: sfs.length };
         this.sendResponse(response);
+        this.sendEvent(new OutputEvent(`[lua-csharp] stackTraceRequest done: ${sfs.length} frames\n`));
       })
       .catch((err) => {
         this.sendEvent(new OutputEvent(`[lua-csharp] getStack error: ${err}\n`));
@@ -396,6 +450,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
         }
         response.body = { stackFrames: sf, totalFrames: sf.length };
         this.sendResponse(response);
+        
       });
   }
 
@@ -404,16 +459,33 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response: DebugProtocol.ScopesResponse,
     _args: DebugProtocol.ScopesArguments
   ): void {
+    // Track selected frameId and allocate per-frame variable references
+    const fid = ((_args as any)?.frameId as number) || 1;
+    this.currentFrameId = fid;
+    this.sendEvent(new OutputEvent(`[lua-csharp] scopesRequest frameId=${fid}\n`));
+
+    let lref = this.localsRefByFrame.get(fid);
+    if (!lref) {
+      lref = ++this.nextVarRef;
+      this.localsRefByFrame.set(fid, lref);
+      this.frameByVarRef.set(lref, { scope: 'locals', frameId: fid });
+    }
+    let uref = this.upvaluesRefByFrame.get(fid);
+    if (!uref) {
+      uref = ++this.nextVarRef;
+      this.upvaluesRefByFrame.set(fid, uref);
+      this.frameByVarRef.set(uref, { scope: 'upvalues', frameId: fid });
+    }
     response.body = {
       scopes: [
         {
           name: 'Locals',
-          variablesReference: this.localsRef,
+          variablesReference: lref,
           expensive: false,
         },
         {
           name: 'Upvalues',
-          variablesReference: this.upvaluesRef,
+          variablesReference: uref,
           expensive: false,
         },
         {
@@ -424,20 +496,66 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       ],
     };
     this.sendResponse(response);
+    
   }
 
   protected variablesRequest(
     response: DebugProtocol.VariablesResponse,
     args: DebugProtocol.VariablesArguments
   ): void {
-    if (args.variablesReference === this.localsRef) {
-      this.rpcCall('getLocals')
+    const ref = args.variablesReference;
+    const mapping = this.frameByVarRef.get(ref);
+    // Legacy top-frame references when VS Code didn't request new scopes
+    if (ref === this.localsRef) {
+      this.currentFrameId = 1;
+      this.sendEvent(new OutputEvent(`[lua-csharp] variablesRequest locals (legacy top) frameId=1\n`));
+      this.rpcCall('getLocals', { frameId: 1 })
         .then((res) => {
           const vars = (res?.variables ?? []) as { name: string; value: string }[];
           response.body = {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
+          
+        })
+        .catch((err) => {
+          this.sendEvent(new OutputEvent(`[lua-csharp] getLocals error: ${err}\n`));
+          response.body = { variables: [] };
+          this.sendResponse(response);
+        });
+      return;
+    }
+    if (ref === this.upvaluesRef) {
+      this.currentFrameId = 1;
+      this.sendEvent(new OutputEvent(`[lua-csharp] variablesRequest upvalues (legacy top) frameId=1\n`));
+      this.rpcCall('getUpvalues', { frameId: 1 })
+        .then((res) => {
+          const vars = (res?.variables ?? []) as { name: string; value: string }[];
+          response.body = {
+            variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
+          };
+          this.sendResponse(response);
+          
+        })
+        .catch((err) => {
+          this.sendEvent(new OutputEvent(`[lua-csharp] getUpvalues error: ${err}\n`));
+          response.body = { variables: [] };
+          this.sendResponse(response);
+        });
+      return;
+    }
+
+    if (mapping && mapping.scope === 'locals') {
+      this.currentFrameId = mapping.frameId;
+      this.sendEvent(new OutputEvent(`[lua-csharp] variablesRequest locals frameId=${mapping.frameId}\n`));
+      this.rpcCall('getLocals', { frameId: mapping.frameId })
+        .then((res) => {
+          const vars = (res?.variables ?? []) as { name: string; value: string }[];
+          response.body = {
+            variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
+          };
+          this.sendResponse(response);
+          
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getLocals error: ${err}\n`));
@@ -445,6 +563,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           this.sendResponse(response);
         });
     } else if (args.variablesReference === this.globalsRef) {
+      // Treat globals as referring to the top frame when scopesRequest is skipped
+      this.currentFrameId = 1;
       this.rpcCall('getGlobals')
         .then((res) => {
           const vars = (res?.variables ?? []) as { name: string; value: string }[];
@@ -452,20 +572,24 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
+          
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getGlobals error: ${err}\n`));
           response.body = { variables: [] };
           this.sendResponse(response);
         });
-    } else if (args.variablesReference === this.upvaluesRef) {
-      this.rpcCall('getUpvalues')
+    } else if (mapping && mapping.scope === 'upvalues') {
+      this.currentFrameId = mapping.frameId;
+      this.sendEvent(new OutputEvent(`[lua-csharp] variablesRequest upvalues frameId=${mapping.frameId}\n`));
+      this.rpcCall('getUpvalues', { frameId: mapping.frameId })
         .then((res) => {
           const vars = (res?.variables ?? []) as { name: string; value: string }[];
           response.body = {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
+          if (this.panel) this.renderBytecode();
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getUpvalues error: ${err}\n`));
@@ -475,6 +599,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     } else {
       response.body = { variables: [] };
       this.sendResponse(response);
+      
     }
   }
 
@@ -530,8 +655,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       this.panel = undefined;
     });
     this.panel.webview.onDidReceiveMessage(async (msg) => {
-      if (!this.lastBytecodeChunk) return;
       if (msg && msg.cmd === 'toggleInstrBp') {
+        if (!this.lastBytecodeChunk) return;
         const index = Number(msg.index);
         const has = !!msg.has;
         try {
@@ -544,6 +669,12 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
         } catch (e) {
           this.sendEvent(new OutputEvent(`[lua-csharp] setInstrBreakpoint error: ${e}\n`));
         }
+      } else if (msg && msg.cmd === 'selectFrame') {
+        const fid = Number(msg.frameId);
+        if (Number.isFinite(fid) && fid > 0) {
+          this.currentFrameId = fid;
+          await this.renderBytecode();
+        }
       }
     });
   }
@@ -551,10 +682,18 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private async renderBytecode() {
     if (!this.panel) return;
     try {
-      const res = await this.rpcCall('getBytecode');
+      const fid = this.currentFrameId || 1;
+      console .log(`Rendering bytecode for frame ${fid}`);
+      let res = this.bytecodeCache.get(fid);
+      if (!res) {
+        res = await this.rpcCall('getBytecode', { frameId: fid });
+        this.bytecodeCache.set(fid, res);
+      }
+      const stackRes = await this.rpcCall('getStack');
+      const frames: { id: number; name: string; file: string; line: number }[] = stackRes?.frames ?? [];
       const chunk = (res?.chunk as string) || '';
       const pc = (res?.pc as number) ?? -1;
-      const instr: { index: number; line: number; text: string }[] = res?.instructions ?? [];
+      const instr: { index: number; line: number; text: string; childIndex?: number }[] = res?.instructions ?? [];
       const constants: string[] = res?.constants ?? [];
       const locals: { name: string; startPc: number; endPc: number }[] = res?.locals ?? [];
       const upvalues: { name: string; isLocal: boolean; index: number }[] = res?.upvalues ?? [];
@@ -572,7 +711,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private buildHtml(
     chunk: string,
     pc: number,
-    instr: { index: number; line: number; text: string }[],
+    instr: { index: number; line: number; text: string; childIndex?: number }[],
     constants: string[],
     locals: { name: string; startPc: number; endPc: number }[],
     upvalues: { name: string; isLocal: boolean; index: number }[],
@@ -656,6 +795,18 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       `
 <script>
   const vscode = acquireVsCodeApi();
+  const framesEl = document.getElementById('frames');
+  if (framesEl) {
+    framesEl.addEventListener('click', (ev) => {
+      const t = ev.target as HTMLElement;
+      if (!t || !t.classList || !t.classList.contains('frame')) return;
+      const fidAttr = t.getAttribute('data-fid');
+      if (!fidAttr) return;
+      const fid = Number(fidAttr);
+      if (!Number.isFinite(fid)) return;
+      vscode.postMessage({ cmd: 'selectFrame', frameId: fid });
+    });
+  }
   document.querySelectorAll('.grid .row').forEach((row) => {
     row.addEventListener('click', () => {
       const idxAttr = row.getAttribute('data-idx');

@@ -14,7 +14,9 @@
   "main": "./dist/extension.js",
   "activationEvents": [
     "onDebugResolve:lua-csharp",
-    "onCommand:lua-csharp.showBytecode"
+    "onCommand:lua-csharp.showBytecode",
+    "onCommand:lua-csharp.findPrototypeAtCursor",
+    "onLanguage:lua"
   ],
   "contributes": {
     "configuration": {
@@ -31,6 +33,11 @@
       {
         "command": "lua-csharp.showBytecode",
         "title": "Lua: Show Bytecode",
+        "category": "Lua-CSharp"
+      },
+      {
+        "command": "lua-csharp.findPrototypeAtCursor",
+        "title": "Lua: Find Prototype At Cursor",
         "category": "Lua-CSharp"
       }
     ],

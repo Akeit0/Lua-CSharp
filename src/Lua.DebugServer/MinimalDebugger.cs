@@ -17,6 +17,68 @@ class MinimalDebugger : IDebugger
     readonly Dictionary<string, List<int>> pending = new();
     readonly Dictionary<string, Prototype> protos = new();
     readonly Dictionary<string, HashSet<int>> instrPending = new(StringComparer.Ordinal);
+    
+    // Expose search by file/line across registered prototypes
+    public (Prototype? proto, int pc) FindPrototypeBySource(string file, int line)
+    {
+        if (string.IsNullOrWhiteSpace(file)) return (null, -1);
+        // Normalize incoming path to chunk-style keys used in this debugger
+        string norm = file.Replace("\\", "/");
+        if (!norm.StartsWith("@")) norm = "@" + norm;
+
+        lock (sync)
+        {
+            // Collect candidate roots that match exact path
+            var candidates = new List<Prototype>();
+            foreach (var kv in protos)
+            {
+                if (string.Equals(kv.Key, norm, StringComparison.OrdinalIgnoreCase))
+                {
+                    candidates.Add(kv.Value);
+                }
+            }
+            // If none, fallback to filename match
+            if (candidates.Count == 0)
+            {
+                var target = System.IO.Path.GetFileName(norm.TrimStart('@').Replace('/', System.IO.Path.DirectorySeparatorChar));
+                foreach (var kv in protos)
+                {
+                    var name = System.IO.Path.GetFileName(kv.Key.TrimStart('@').Replace('/', System.IO.Path.DirectorySeparatorChar));
+                    if (string.Equals(name, target, StringComparison.OrdinalIgnoreCase))
+                    {
+                        candidates.Add(kv.Value);
+                    }
+                }
+            }
+
+            foreach (var root in candidates)
+            {
+                var found = FindInPrototypeTree(root, line);
+                if (found.proto is not null) return found;
+            }
+
+            return (null, -1);
+        }
+    }
+
+    static (Prototype? proto, int pc) FindInPrototypeTree(Prototype proto, int line)
+    {
+        // Check children first to prefer most specific function
+        foreach (var c in proto.ChildPrototypes)
+        {
+            var found = FindInPrototypeTree(c, line);
+            if (found.proto is not null) return found;
+        }
+
+        // Then check this prototype's line table
+        int pc = -1;
+        for (int i = 0; i < proto.LineInfo.Length; i++)
+        {
+            if (proto.LineInfo[i] == line) { pc = i; break; }
+        }
+
+        return pc >= 0 ? (proto, pc) : (null, -1);
+    }
     KeyValuePair<(Prototype proto, int index), Instruction>? stepBreak;
     LuaState? lastThread;
     int pushCount = 0;

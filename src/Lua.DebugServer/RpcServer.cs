@@ -67,13 +67,13 @@ static class RpcServer
                         HandleStepOut(id);
                         break;
                     case "getLocals":
-                        HandleGetLocals(id);
+                        HandleGetLocals(id, @params);
                         break;
                     case "getGlobals":
                         HandleGetGlobals(id);
                         break;
                     case "getUpvalues":
-                        HandleGetUpvalues(id);
+                        HandleGetUpvalues(id, @params);
                         break;
                     case "setLocal":
                         HandleSetLocal(id, @params);
@@ -88,10 +88,13 @@ static class RpcServer
                         HandleSetInstrBreakpoint(id, @params);
                         break;
                     case "getBytecode":
-                        HandleGetBytecode(id);
+                        HandleGetBytecode(id, @params);
                         break;
                     case "getStack":
                         HandleGetStack(id);
+                        break;
+                    case "findPrototype":
+                        HandleFindPrototype(id, @params);
                         break;
                     case "terminate":
                         WriteResponse(id, new { });
@@ -224,9 +227,13 @@ static class RpcServer
         WriteResponse(id, new { allThreadsContinued = true });
     }
 
-    static void HandleGetLocals(string? id)
+    static void HandleGetLocals(string? id, JsonElement @params)
     {
-        var locals = LuaDebugSession.Current?.GetLocals() ?? Array.Empty<object>();
+        object[] locals;
+        if (@params.ValueKind != JsonValueKind.Undefined && @params.TryGetProperty("frameId", out var fEl) && fEl.TryGetInt32(out var fid))
+            locals = LuaDebugSession.Current?.GetLocalsForFrame(fid) ?? Array.Empty<object>();
+        else
+            locals = LuaDebugSession.Current?.GetLocals() ?? Array.Empty<object>();
         WriteResponse(id, new { variables = locals });
     }
 
@@ -263,9 +270,13 @@ static class RpcServer
         WriteResponse(id, new { variables = globals });
     }
 
-    static void HandleGetUpvalues(string? id)
+    static void HandleGetUpvalues(string? id, JsonElement @params)
     {
-        var upvalues = LuaDebugSession.Current?.GetUpvalues() ?? Array.Empty<object>();
+        object[] upvalues;
+        if (@params.ValueKind != JsonValueKind.Undefined && @params.TryGetProperty("frameId", out var fEl) && fEl.TryGetInt32(out var fid))
+            upvalues = LuaDebugSession.Current?.GetUpvaluesForFrame(fid) ?? Array.Empty<object>();
+        else
+            upvalues = LuaDebugSession.Current?.GetUpvalues() ?? Array.Empty<object>();
         WriteResponse(id, new { variables = upvalues });
     }
 
@@ -299,9 +310,13 @@ static class RpcServer
         }
     }
 
-    static void HandleGetBytecode(string? id)
+    static void HandleGetBytecode(string? id, JsonElement @params)
     {
-        var result = LuaDebugSession.Current?.GetBytecodeSnapshot();
+        object? result;
+        if (@params.ValueKind != JsonValueKind.Undefined && @params.TryGetProperty("frameId", out var fEl) && fEl.TryGetInt32(out var fid))
+            result = LuaDebugSession.Current?.GetBytecodeSnapshotForFrame(fid);
+        else
+            result = LuaDebugSession.Current?.GetBytecodeSnapshot();
         if (result is null)
         {
             WriteResponse(id, error: new { message = "no paused location" });
@@ -331,5 +346,30 @@ static class RpcServer
         var enabled = @params.TryGetProperty("enabled", out var e) && e.GetBoolean();
         LuaDebugSession.Current?.SetInstructionBreakpoint(chunk, index, enabled);
         WriteResponse(id, new { });
+    }
+
+    static void HandleFindPrototype(string? id, JsonElement @params)
+    {
+        if (!@params.TryGetProperty("file", out var f) || f.ValueKind != JsonValueKind.String)
+        {
+            WriteResponse(id, error: new { message = "missing file" });
+            return;
+        }
+
+        if (!@params.TryGetProperty("line", out var l) || !l.TryGetInt32(out var line))
+        {
+            WriteResponse(id, error: new { message = "missing line" });
+            return;
+        }
+
+        var file = f.GetString() ?? string.Empty;
+        var result = LuaDebugSession.Current?.FindPrototypeBytecode(file, line);
+        if (result is null)
+        {
+            WriteResponse(id, error: new { message = "not found" });
+            return;
+        }
+
+        WriteResponse(id, result);
     }
 }
