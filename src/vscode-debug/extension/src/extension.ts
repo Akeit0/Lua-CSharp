@@ -43,11 +43,11 @@ class LuaCSharpConfigProvider implements vscode.DebugConfigurationProvider {
     if (!config.request) config.request = 'launch';
     if (!config.program) {
       const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-      config.program = `${folder}/sandbox/DebuggingApp/test.lua`;
+      config.program = `${folder}/test.lua`;
     }
     if (!config.cwd) {
       const folder = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? '';
-      config.cwd = `${folder}/sandbox/DebuggingApp`;
+      config.cwd = `${folder}`;
     }
     if (config.stopOnEntry === undefined) config.stopOnEntry = true;
     return config;

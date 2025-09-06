@@ -6,6 +6,14 @@ static class RpcServer
     static readonly JsonSerializerOptions options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, WriteIndented = false };
 
     static readonly object writeLock = new();
+    static TextReader input = Console.In;
+    static TextWriter output = Console.Out;
+
+    public static void UseIO(TextReader reader, TextWriter writer)
+    {
+        input = reader;
+        output = writer;
+    }
 
     public static async Task RunAsync()
     {
@@ -13,10 +21,10 @@ static class RpcServer
         WriteLogToConsole("[Lua.DebugServer] ready");
 
         string? line;
-        while ((line = await Console.In.ReadLineAsync()) is not null)
+        while ((line = await input.ReadLineAsync()) is not null)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-            //WriteToConsole( $"=> {line}");
+            WriteToConsole($"=> {line}");
             try
             {
                 var doc = JsonDocument.Parse(line);
@@ -126,8 +134,31 @@ static class RpcServer
         var json = JsonSerializer.Serialize(payload, options);
         lock (writeLock)
         {
-            Console.Out.WriteLine(json);
-            Console.Out.Flush();
+            output.WriteLine(json);
+            output.Flush();
+        }
+    }
+
+    public static async Task RunTcpAsync(string program, string host, int port, CancellationToken cancellationToken = default)
+    {
+        var ip = System.Net.IPAddress.TryParse(host, out var parsed) ? parsed : System.Net.IPAddress.Any;
+        var listener = new System.Net.Sockets.TcpListener(ip, port);
+
+        listener.Start();
+        try
+        {
+            using var client = await listener.AcceptTcpClientAsync(cancellationToken);
+
+            using var stream = client.GetStream();
+            using var reader = new StreamReader(stream);
+            using var writer = new StreamWriter(stream) { AutoFlush = true, NewLine = "\n" };
+            UseIO(reader, writer);
+
+            await RunAsync();
+        }
+        finally
+        {
+            listener.Stop();
         }
     }
 

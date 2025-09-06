@@ -47,16 +47,46 @@
               "program": {
                 "type": "string",
                 "description": "Path to the Lua script to debug.",
-                "default": "${workspaceFolder}/sandbox/DebuggingApp/test.lua"
+                "default": "${workspaceFolder}/test.lua"
               },
               "cwd": {
                 "type": "string",
                 "description": "Working directory for the debug target.",
-                "default": "${workspaceFolder}/sandbox/DebuggingApp"
+                "default": "${workspaceFolder}"
               },
               "stopOnEntry": {
                 "type": "boolean",
                 "description": "Break on entry to the program.",
+                "default": true
+              }
+            }
+          },
+          "attach": {
+            "required": ["host", "port"],
+            "properties": {
+              "host": {
+                "type": "string",
+                "description": "Host to connect to the running Lua-CSharp Debug Server.",
+                "default": "127.0.0.1"
+              },
+              "port": {
+                "type": "number",
+                "description": "Port for the Lua-CSharp Debug Server (TCP).",
+                "default": 4711
+              },
+              "program": {
+                "type": "string",
+                "description": "Optional: Lua script to launch after breakpoints are set.",
+                "default": ""
+              },
+              "cwd": {
+                "type": "string",
+                "description": "Optional: Working directory for the program when launching via attach.",
+                "default": ""
+              },
+              "stopOnEntry": {
+                "type": "boolean",
+                "description": "Optional: Break on entry when launching via attach.",
                 "default": true
               }
             }
@@ -67,9 +97,16 @@
             "name": "Lua-CSharp: Launch",
             "type": "lua-csharp",
             "request": "launch",
-            "program": "${workspaceFolder}/sandbox/DebuggingApp/test.lua",
-            "cwd": "${workspaceFolder}/sandbox/DebuggingApp",
+            "program": "${workspaceFolder}/test.lua",
+            "cwd": "${workspaceFolder}",
             "stopOnEntry": true
+          },
+          {
+            "name": "Lua-CSharp: Attach (TCP)",
+            "type": "lua-csharp",
+            "request": "attach",
+            "host": "127.0.0.1",
+            "port": 4711
           }
         ]
       }

@@ -8,7 +8,22 @@
       "program": "${workspaceFolder}/test.lua",
       "cwd": "${workspaceFolder}",
       "stopOnEntry": true
+    },
+    {
+      "type": "lua-csharp",
+      "request": "attach",
+      "name": "Lua-CSharp: Attach (TCP)",
+      "host": "127.0.0.1",
+      "port": 4711
+    },
+    {
+      "type": "lua-local",
+      "request": "launch",
+      "name": "Debug Lua LL",
+      "program": {
+        "lua": "lua5.1",
+        "file": "test.lua"
+      }
     }
   ]
 }
-

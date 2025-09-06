@@ -46,8 +46,8 @@ If you see an esbuild platform mismatch (e.g. Windows node_modules on WSL), remo
       "name": "Lua-CSharp: Launch",
       "type": "lua-csharp",
       "request": "launch",
-      "program": "${workspaceFolder}/sandbox/DebuggingApp/test.lua",
-      "cwd": "${workspaceFolder}/sandbox/DebuggingApp",
+      "program": "${workspaceFolder}/test.lua",
+      "cwd": "${workspaceFolder}",
       "stopOnEntry": true
     }
   ]

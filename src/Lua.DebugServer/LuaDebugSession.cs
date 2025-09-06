@@ -38,6 +38,13 @@ sealed class LuaDebugSession
             desiredBps[source] = map;
             bpDirty = true;
         }
+
+        // If the prototype is already registered, apply immediately
+        try
+        {
+            debugger?.ApplyBreakpoints(source, GetDesiredBreakpointsForChunk(source)!);
+        }
+        catch { }
     }
 
     // Called from VM thread while paused
@@ -60,10 +67,26 @@ sealed class LuaDebugSession
     {
         lock (locals)
         {
-            if (desiredBps.TryGetValue(chunkName, out var set))
-            {
+            // Normalize incoming chunk key
+            var key = chunkName;
+            if (!key.StartsWith("@")) key = "@" + key;
+            key = key.Replace("\\", "/");
+
+            if (desiredBps.TryGetValue(key, out var set))
                 return new Dictionary<int, (string? condition, string? hit, string? log)>(set);
+
+            // Fallback: match by filename (handles short chunk names like @test.lua or differing absolute paths)
+            try
+            {
+                var fileOnly = System.IO.Path.GetFileName(key.TrimStart('@').Replace('/', System.IO.Path.DirectorySeparatorChar));
+                foreach (var kv in desiredBps)
+                {
+                    var kFile = System.IO.Path.GetFileName(kv.Key.TrimStart('@').Replace('/', System.IO.Path.DirectorySeparatorChar));
+                    if (string.Equals(fileOnly, kFile, StringComparison.OrdinalIgnoreCase))
+                        return new Dictionary<int, (string? condition, string? hit, string? log)>(kv.Value);
+                }
             }
+            catch { }
 
             return null;
         }
@@ -117,6 +140,13 @@ sealed class LuaDebugSession
     void EnsureDebugger()
     {
         if (this.state != null && debugger != null) return;
+        // Try to adopt existing debugger (attach mode)
+        if (MinimalDebugger.Active is not null)
+        {
+            debugger = MinimalDebugger.Active;
+            return;
+        }
+
         var state = LuaState.Create();
         state.OpenBasicLibrary();
         var dbg = new MinimalDebugger();
@@ -231,6 +261,8 @@ sealed class LuaDebugSession
     {
         lock (locals)
         {
+            // Adopt the running state for globals snapshot in attach scenarios
+            this.state = thread;
             locals.Clear();
             var proto = closure.Proto;
             var f = thread.GetCurrentFrame();
@@ -292,10 +324,14 @@ sealed class LuaDebugSession
                 for (int i = 0; i < count; i++)
                 {
                     string name;
-                    try { name = desc[i].Name.ToString(); } catch { name = $"upvalue_{i}"; }
+                    try { name = desc[i].Name.ToString(); }
+                    catch { name = $"upvalue_{i}"; }
+
                     if (string.IsNullOrWhiteSpace(name)) name = $"upvalue_{i}";
                     string value;
-                    try { value = values[i].GetValue().ToString(); } catch { value = string.Empty; }
+                    try { value = values[i].GetValue().ToString(); }
+                    catch { value = string.Empty; }
+
                     upvalues.Add((name.Trim(), value));
                 }
             }
@@ -351,7 +387,9 @@ sealed class LuaDebugSession
                     if (!TryParseLuaValue(valueText, out var v)) return (false, null);
                     stack[baseIndex + i] = v;
                     string s;
-                    try { s = stack[baseIndex + i].ToString(); } catch { s = valueText; }
+                    try { s = stack[baseIndex + i].ToString(); }
+                    catch { s = valueText; }
+
                     return (true, s);
                 }
             }
@@ -375,7 +413,9 @@ sealed class LuaDebugSession
             for (int i = 0; i < count; i++)
             {
                 string n;
-                try { n = desc[i].Name.ToString(); } catch { n = $"upvalue_{i}"; }
+                try { n = desc[i].Name.ToString(); }
+                catch { n = $"upvalue_{i}"; }
+
                 if (string.IsNullOrWhiteSpace(n)) n = $"upvalue_{i}";
                 n = n.Trim();
                 if (string.Equals(n, name, StringComparison.Ordinal))
@@ -383,8 +423,11 @@ sealed class LuaDebugSession
                     if (!TryParseLuaValue(valueText, out var v)) return (false, null);
                     try { values[i].SetValue(v); }
                     catch { return (false, null); }
+
                     string s;
-                    try { s = values[i].GetValue().ToString(); } catch { s = valueText; }
+                    try { s = values[i].GetValue().ToString(); }
+                    catch { s = valueText; }
+
                     return (true, s);
                 }
             }

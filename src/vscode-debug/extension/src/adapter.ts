@@ -15,11 +15,13 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import * as vscode from 'vscode';
+import * as net from 'node:net';
 
 export class LuaCSharpDebugSession extends LoggingDebugSession {
   private configurationDone = false;
   private threadId = 1;
   private proc?: ChildProcessWithoutNullStreams;
+  private socket?: net.Socket;
   private nextId = 1;
   private pendingLaunchArgs?: {
     program: string;
@@ -35,6 +37,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private upvaluesRef = 0;
   private panel?: vscode.WebviewPanel;
   private lastBytecodeChunk?: string;
+  private pendingBps = new Map<string, { line: number; condition?: string; hitCondition?: string; logMessage?: string }[]>();
+  private initializedSent = false;
 
   public constructor() {
     super();
@@ -115,10 +119,49 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
 
     // Kick the host with initialize; VS Code will send setBreakpoints, then configurationDone
     this.rpcSend({ method: 'initialize' });
+    this.initializedSent = true;
+    this.flushPendingBreakpoints();
 
     // Save for later (after configurationDone)
     this.pendingLaunchArgs = { program: script, cwd, stopOnEntry: args.stopOnEntry };
 
+    this.sendResponse(response);
+  }
+
+  protected async attachRequest(
+    response: DebugProtocol.AttachResponse,
+    args: DebugProtocol.AttachRequestArguments & { host: string; port: number; program?: string; cwd?: string; stopOnEntry?: boolean }
+  ) {
+    // Connect to running server via TCP
+    const host = (args as any).host || '127.0.0.1';
+    const port = Number((args as any).port || 4711);
+
+    this.sendEvent(new OutputEvent(`[lua-csharp] Attaching to ${host}:${port}\n`));
+
+    await new Promise<void>((resolve, reject) => {
+      const sock = net.createConnection({ host, port }, () => {
+        this.socket = sock;
+        resolve();
+      });
+      sock.on('error', reject);
+      const rl = readline.createInterface({ input: sock, crlfDelay: Infinity });
+      rl.on('line', (line) => this.handleHostLine(line));
+      sock.on('close', () => this.sendEvent(new TerminatedEvent()));
+    });
+
+    // Initialize the server side
+    this.rpcSend({ method: 'initialize' });
+    this.initializedSent = true;
+    this.flushPendingBreakpoints();
+
+    // If attach includes a program, defer launching until configurationDone
+    const program = (args as any).program as string | undefined;
+    const cwd = (args as any).cwd as string | undefined;
+    const stopOnEntry = (args as any).stopOnEntry as boolean | undefined;
+    if (program && program.length > 0) {
+      this.pendingLaunchArgs = { program, cwd, stopOnEntry } as any;
+      this.launched = false;
+    }
     this.sendResponse(response);
   }
 
@@ -129,6 +172,12 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     if (this.proc && !this.proc.killed) {
       this.rpcSend({ method: 'terminate' });
       this.proc.kill();
+    }
+    if (this.socket) {
+      try { this.rpcSend({ method: 'terminate' }); } catch {}
+      this.socket.end();
+      this.socket.destroy();
+      this.socket = undefined;
     }
     this.sendResponse(response);
   }
@@ -173,11 +222,29 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       logMessage: (b as any).logMessage,
     }));
     const sourcePath = args.source?.path ?? '';
-    this.rpcSend({ method: 'setBreakpoints', params: { source: sourcePath, breakpoints } });
+    this.queueOrSendBreakpoints(sourcePath, breakpoints);
     response.body = {
       breakpoints: breakpoints.map((bp) => ({ verified: true, line: bp.line })),
     } as any;
     this.sendResponse(response);
+  }
+  private queueOrSendBreakpoints(
+    source: string,
+    breakpoints: { line: number; condition?: string; hitCondition?: string; logMessage?: string }[]
+  ) {
+    if ((this.proc || this.socket) && this.initializedSent) {
+      this.rpcSend({ method: 'setBreakpoints', params: { source, breakpoints } });
+    } else {
+      this.pendingBps.set(source, breakpoints);
+    }
+  }
+
+  private flushPendingBreakpoints() {
+    if (!(this.proc || this.socket) || !this.initializedSent) return;
+    for (const [source, bps] of this.pendingBps) {
+      this.rpcSend({ method: 'setBreakpoints', params: { source, breakpoints: bps } });
+    }
+    this.pendingBps.clear();
   }
 
   private workspaceDir(): string | undefined {
@@ -262,20 +329,21 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   }
 
   private rpcSend(payload: { method: string; params?: any }) {
-    if (!this.proc) return;
     const id = String(this.nextId++);
-    const msg = JSON.stringify({ id, method: payload.method, params: payload.params ?? {} });
-    this.proc.stdin.write(msg + '\n');
+    const msg = JSON.stringify({ id, method: payload.method, params: payload.params ?? {} }) + '\n';
+    if (this.proc) this.proc.stdin.write(msg);
+    else if (this.socket) this.socket.write(msg);
   }
 
   private rpcCall(method: string, params?: any): Promise<any> {
-    if (!this.proc) return Promise.reject(new Error('no process'));
+    if (!this.proc && !this.socket) return Promise.reject(new Error('no transport'));
     const id = String(this.nextId++);
     const promise = new Promise<any>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });
-    const msg = JSON.stringify({ id, method, params: params ?? {} });
-    this.proc!.stdin.write(msg + '\n');
+    const msg = JSON.stringify({ id, method, params: params ?? {} }) + '\n';
+    if (this.proc) this.proc.stdin.write(msg);
+    else this.socket!.write(msg);
     return promise;
   }
 

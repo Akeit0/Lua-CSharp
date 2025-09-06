@@ -11,7 +11,6 @@ public record struct CallStackFrame
     public required int VariableArgumentCount;
     public int CallerInstructionIndex;
     internal CallStackFrameFlags Flags;
-    public int Version;
 
     internal bool IsTailCall => (Flags & CallStackFrameFlags.TailCall) == CallStackFrameFlags.TailCall;
 }

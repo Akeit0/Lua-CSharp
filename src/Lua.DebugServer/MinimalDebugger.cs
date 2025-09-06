@@ -4,6 +4,13 @@ using Lua.Runtime;
 
 class MinimalDebugger : IDebugger
 {
+    public static MinimalDebugger? Active;
+
+    public MinimalDebugger()
+    {
+        Active = this;
+    }
+
     readonly Dictionary<(Prototype, int), Instruction> breakpoints = new();
     readonly Dictionary<(Prototype, int), (string? cond, string? hit, string? log)> breakpointOptions = new();
     readonly Dictionary<(Prototype, int), int> breakpointHitCounts = new();
@@ -339,6 +346,38 @@ class MinimalDebugger : IDebugger
         }
     }
 
+    // Apply desired breakpoints for an already-registered chunk
+    public void ApplyBreakpoints(string chunkName, Dictionary<int, (string? condition, string? hit, string? log)> lines)
+    {
+        if (!chunkName.StartsWith('@')) chunkName = "@" + chunkName;
+        lock (sync)
+        {
+            if (!protos.TryGetValue(chunkName, out var proto))
+            {
+                // Fallback: match by file name
+                var targetName = System.IO.Path.GetFileName(chunkName.TrimStart('@').Replace('\\', '/'));
+                foreach (var kv in protos)
+                {
+                    var name = System.IO.Path.GetFileName(kv.Key.TrimStart('@').Replace('\\', '/'));
+                    if (string.Equals(name, targetName, StringComparison.Ordinal))
+                    {
+                        proto = kv.Value;
+                        break;
+                    }
+                }
+
+                if (proto is null) return;
+            }
+
+            // Clear existing for this chunk (except current paused location)
+            ClearBreakpoints(chunkName);
+            foreach (var kv in lines)
+            {
+                SetBreakPointAtLine(proto, kv.Key, kv.Value.condition, kv.Value.hit, kv.Value.log);
+            }
+        }
+    }
+
     public void DeleteStepBreak()
     {
         lock (sync)
@@ -442,7 +481,7 @@ class MinimalDebugger : IDebugger
     // New IDebugger methods for call stack notifications
     public void OnPushCallStackFrame(LuaState thread)
     {
-        RpcServer.WriteToConsole($"[Lua.DebugServer] OnPushCallStackFrame (stepMode={stepMode})");
+        //RpcServer.WriteToConsole($"[Lua.DebugServer] OnPushCallStackFrame (stepMode={stepMode})");
 
         if (stepMode == StepMode.In)
         {
@@ -502,7 +541,7 @@ class MinimalDebugger : IDebugger
 
     public void OnPopCallStackFrame(LuaState thread)
     {
-        RpcServer.WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame (stepMode={stepMode})");
+        //RpcServer.WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame (stepMode={stepMode})");
 
         if (stepMode != StepMode.None)
         {
