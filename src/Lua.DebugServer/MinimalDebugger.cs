@@ -142,6 +142,7 @@ class MinimalDebugger : IDebugger
             bool shouldPause = true;
             (string? cond, string? hit, string? log) opts;
             lock (sync) { breakpointOptions.TryGetValue(key, out opts); }
+
             // hit count
             int hitCount = 0;
             lock (sync)
@@ -150,24 +151,39 @@ class MinimalDebugger : IDebugger
                 hitCount++;
                 breakpointHitCounts[key] = hitCount;
             }
+
             if (!string.IsNullOrWhiteSpace(opts.hit))
             {
-               // RpcServer .WriteLogToConsole($"[Lua.DebugServer] Evaluating hit condition '{opts.hit}' at hit count {hitCount}");
-                try { if (!EvaluateHitCondition(hitCount, opts.hit!)) shouldPause = false; }
-                catch (Exception ex) { RpcServer.WriteToConsole($"[Lua.DebugServer] hitCondition error: {ex.Message}\n", "stderr"); shouldPause = false; }
+                // RpcServer .WriteLogToConsole($"[Lua.DebugServer] Evaluating hit condition '{opts.hit}' at hit count {hitCount}");
+                try
+                {
+                    if (!EvaluateHitCondition(hitCount, opts.hit!)) shouldPause = false;
+                }
+                catch (Exception ex)
+                {
+                    RpcServer.WriteToConsole($"[Lua.DebugServer] hitCondition error: {ex.Message}\n", "stderr");
+                    shouldPause = false;
+                }
             }
+
             if (shouldPause && !string.IsNullOrWhiteSpace(opts.cond))
             {
                 //RpcServer .WriteLogToConsole($"[Lua.DebugServer] Evaluating condition '{opts.cond}'");
                 try { shouldPause = EvaluateCondition(thread, pc, closure, opts.cond!); }
-                catch (Exception ex) { RpcServer.WriteToConsole($"[Lua.DebugServer] condition error: {ex.Message}\n", "stderr"); shouldPause = false; }
+                catch (Exception ex)
+                {
+                    RpcServer.WriteToConsole($"[Lua.DebugServer] condition error: {ex.Message}\n", "stderr");
+                    shouldPause = false;
+                }
             }
+
             // logpoint: if message is present, log and do not pause
-            if (shouldPause&&!string.IsNullOrWhiteSpace(opts.log))
+            if (shouldPause && !string.IsNullOrWhiteSpace(opts.log))
             {
                 //RpcServer .WriteLogToConsole($"[Lua.DebugServer] Hit logpoint: {opts.log}");
                 try { LogMessage(thread, pc, closure, opts.log!); }
                 catch (Exception ex) { RpcServer.WriteToConsole($"[Lua.DebugServer] logpoint error: {ex.Message}\n", "stderr"); }
+
                 shouldPause = false;
             }
 
@@ -540,7 +556,7 @@ class MinimalDebugger : IDebugger
     {
         lock (sync)
         {
-            SetStepToNextLine(proto, pc, stepIn:true);
+            SetStepToNextLine(proto, pc, stepIn: true);
             stepMode = StepMode.In;
             //RpcServer .WriteToConsole($"[Lua.DebugServer] Step-In armed");
         }
@@ -605,18 +621,17 @@ class MinimalDebugger : IDebugger
 
         // Simple forms: name, name == literal, name ~= literal, name != literal, numeric comparisons
         // Extract lhs, op, rhs
-        string ident = condition;
+        ReadOnlySpan<char> ident = condition;
         string? op = null;
-        string? rhs = null;
-        var ops = new[] { "==", "~=", "!=", ">=", "<=", ">", "<" };
-        foreach (var o in ops)
+        ReadOnlySpan<char> rhs = default;
+        foreach (var o in compareOps)
         {
             var idx = condition.IndexOf(o, StringComparison.Ordinal);
             if (idx > 0)
             {
-                ident = condition.Substring(0, idx).Trim();
+                ident = condition.AsSpan(0, idx).Trim();
                 op = o;
-                rhs = condition.Substring(idx + o.Length).Trim();
+                rhs = condition.AsSpan(idx + o.Length).Trim();
                 break;
             }
         }
@@ -637,56 +652,67 @@ class MinimalDebugger : IDebugger
                 if (val.Value.Type.ToString() == "Nil") return false;
             }
             catch { }
+
             if (val.Value.TryRead<bool>(out var b)) return b;
             return true;
         }
 
         // Parse RHS literal
-        if (rhs is null) return false;
-        object? lit = null;
+        if (rhs.IsEmpty) return false;
+        LuaValue? lit = null;
         if ((rhs.StartsWith("\"") && rhs.EndsWith("\"")) || (rhs.StartsWith("'") && rhs.EndsWith("'")))
         {
-            lit = rhs.Substring(1, Math.Max(0, rhs.Length - 2));
+            lit = rhs.Slice(1, Math.Max(0, rhs.Length - 2)).ToString();
         }
-        else if (string.Equals(rhs, "true", StringComparison.OrdinalIgnoreCase)) lit = true;
-        else if (string.Equals(rhs, "false", StringComparison.OrdinalIgnoreCase)) lit = false;
-        else if (string.Equals(rhs, "nil", StringComparison.OrdinalIgnoreCase)) lit = null;
+        else if (rhs is "true") lit = true;
+        else if (rhs is "false") lit = false;
+        else if (rhs is "nil") lit = null;
         else if (double.TryParse(rhs, System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out var d)) lit = d;
-        else lit = rhs; // bare string
+        else lit = rhs.ToString(); // bare string
 
-        // Compare
-        if (lit is double nd)
-        {
-            if (!val.Value.TryRead<double>(out var vd)) return false;
-            return op switch
-            {
-                "==" => vd == nd,
-                "!=" or "~=" => vd != nd,
-                ">" => vd > nd,
-                "<" => vd < nd,
-                ">=" => vd >= nd,
-                "<=" => vd <= nd,
-                _ => false
-            };
-        }
-        if (lit is bool nb)
-        {
-            if (!val.Value.TryRead<bool>(out var vb)) return false;
-            return op switch
-            {
-                "==" => vb == nb,
-                "!=" or "~=" => vb != nb,
-                _ => false
-            };
-        }
         if (lit is null)
         {
             // compare with nil based on ToString/Type
-            try { if (val.Value.Type.ToString() == "Nil") return op is "=="; else return op is "!=" or "~="; }
+            try
+            {
+                if (val.Value.Type.ToString() == "Nil") return op is "==";
+                else return op is "!=" or "~=";
+            }
             catch { return false; }
         }
+        else
+        {
+            // Compare
+            if (lit.Value.TryRead<double>(out var nd))
+            {
+                if (!val.Value.TryRead<double>(out var vd)) return false;
+                return op switch
+                {
+                    "==" => vd == nd,
+                    "!=" or "~=" => vd != nd,
+                    ">" => vd > nd,
+                    "<" => vd < nd,
+                    ">=" => vd >= nd,
+                    "<=" => vd <= nd,
+                    _ => false
+                };
+            }
+
+            if (lit.Value.TryRead<bool>(out var nb))
+            {
+                if (!val.Value.TryRead<bool>(out var vb)) return false;
+                return op switch
+                {
+                    "==" => vb == nb,
+                    "!=" or "~=" => vb != nb,
+                    _ => false
+                };
+            }
+        }
+
+
         // string
-        var ls = lit.ToString() ?? string.Empty;
+        var ls = lit.Value.ToString() ?? string.Empty;
         if (!val.Value.TryRead<string>(out var vs)) vs = val.Value.ToString();
         return op switch
         {
@@ -696,7 +722,7 @@ class MinimalDebugger : IDebugger
         };
     }
 
-    LuaValue? GetValueByName(LuaState thread, int pc, LuaClosure closure, string name)
+    LuaValue? GetValueByName(LuaState thread, int pc, LuaClosure closure, ReadOnlySpan<char> name)
     {
         name = name.Trim();
         if (name.Length == 0) return null;
@@ -707,11 +733,12 @@ class MinimalDebugger : IDebugger
         for (int i = 0; i < proto.MaxStackSize && (baseIndex + i) < stack.Length; i++)
         {
             var n = DebugUtility.GetLocalVariableName(proto, i, pc);
-            if (!string.IsNullOrEmpty(n) && string.Equals(n.Trim(), name, StringComparison.Ordinal))
+            if (!string.IsNullOrEmpty(n) && (n.Trim().SequenceEqual(name)))
             {
                 return stack[baseIndex + i];
             }
         }
+
         // upvalues
         try
         {
@@ -720,8 +747,8 @@ class MinimalDebugger : IDebugger
             var count = Math.Min(desc.Length, values.Length);
             for (int i = 0; i < count; i++)
             {
-                string n = desc[i].Name.ToString();
-                if (!string.IsNullOrEmpty(n) && string.Equals(n.Trim(), name, StringComparison.Ordinal))
+                string n = desc[i].Name;
+                if (!string.IsNullOrEmpty(n) && (n.Trim().SequenceEqual(name)))
                 {
                     return values[i].GetValue();
                 }
@@ -734,40 +761,43 @@ class MinimalDebugger : IDebugger
         {
             foreach (var kv in thread.Environment)
             {
-                if (kv.Key.TryRead<string>(out var n) && string.Equals(n?.Trim(), name, StringComparison.Ordinal))
+                if (kv.Key.TryRead<string>(out var n) && n.SequenceEqual(name))
                 {
                     return kv.Value;
                 }
             }
         }
         catch { }
+
         return null;
     }
+
+    static readonly string[] compareOps = new[] { ">=", "<=", "==", "!=", "^=", ">", "<" };
 
     bool EvaluateHitCondition(int hitCount, string expr)
     {
         expr = expr.Trim();
         if (int.TryParse(expr, out var n)) return hitCount == n;
-        string[] ops = new[] { ">=", "<=", "==", "!=", ">", "<" };
-        foreach (var op in ops)
+        foreach (var op in compareOps)
         {
             var idx = expr.IndexOf(op, StringComparison.Ordinal);
             if (idx > 0)
             {
-                var rhsText = expr[(idx + op.Length)..].Trim();
+                var rhsText = expr.AsSpan()[(idx + op.Length)..].Trim();
                 if (!int.TryParse(rhsText, out var rhs)) return false;
                 return op switch
                 {
                     ">=" => hitCount >= rhs,
                     "<=" => hitCount <= rhs,
                     "==" => hitCount == rhs,
-                    "!=" => hitCount != rhs,
+                    "~=" or "!=" => hitCount != rhs,
                     ">" => hitCount > rhs,
                     "<" => hitCount < rhs,
                     _ => false,
                 };
             }
         }
+
         return false;
     }
 
@@ -775,7 +805,7 @@ class MinimalDebugger : IDebugger
     {
         // Replace {name} with value from locals/upvalues/globals
         var sb = new System.Text.StringBuilder();
-        for (int i = 0; i < template.Length; )
+        for (int i = 0; i < template.Length;)
         {
             var c = template[i];
             if (c == '{')
@@ -783,18 +813,26 @@ class MinimalDebugger : IDebugger
                 var j = template.IndexOf('}', i + 1);
                 if (j > i + 1)
                 {
-                    var name = template.Substring(i + 1, j - i - 1).Trim();
+                    var name = template.AsSpan(i + 1, j - i - 1).Trim();
                     var val = GetValueByName(thread, pc, closure, name);
                     string text;
                     if (val is null) text = "nil";
-                    else { try { text = val.Value.ToString(); } catch { text = ""; } }
+                    else
+                    {
+                        try { text = val.Value.ToString(); }
+                        catch { text = ""; }
+                    }
+
                     sb.Append(text);
                     i = j + 1;
                     continue;
                 }
             }
-            sb.Append(c); i++;
+
+            sb.Append(c);
+            i++;
         }
+
         RpcServer.WriteToConsole(sb.ToString(), "stdout");
     }
 }
