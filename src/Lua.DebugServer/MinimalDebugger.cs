@@ -10,9 +10,10 @@ class MinimalDebugger : IDebugger
     readonly Dictionary<string, HashSet<int>> instrPending = new(StringComparer.Ordinal);
     KeyValuePair<(Prototype proto, int index), Instruction>? stepBreak;
     LuaState? lastThread;
+    int pushCount = 0;
     readonly object sync = new();
 
-    enum StepMode { None, In, Out }
+    enum StepMode { None, Over, In, Out }
 
     StepMode stepMode = StepMode.None;
 
@@ -296,17 +297,20 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public bool SetStepToNextLine(Prototype proto, int pc)
+    public bool SetStepToNextLine(Prototype proto, int pc, bool stepIn = false)
     {
+        pushCount = 0;
         // Restore any previous step trap and remove it from the breakpoint map
         DeleteStepBreak();
+        stepMode = StepMode.Over;
         // Clear any previous temp step patches
         if (pc < 0 || pc >= proto.LineInfo.Length) return false;
 
-        var currentInstruction = proto.Code[pc];
-        if (currentInstruction.OpCode == (OpCode)40)
+        var currentInstruction = GetOriginalInstruction(proto, pc);
+
+        if (stepIn && currentInstruction.OpCode is OpCode.Call or OpCode.TailCall)
         {
-            currentInstruction = breakpoints[(proto, pc)];
+            return false;
         }
 
         var nextPc = pc + 1;
@@ -345,6 +349,15 @@ class MinimalDebugger : IDebugger
         var currentLine = proto.LineInfo[pc];
         for (int i = nextPc; i < proto.LineInfo.Length; i++)
         {
+            if (stepIn)
+            {
+                var instruction = GetOriginalInstruction(proto, i);
+                if (instruction.OpCode is OpCode.Call or OpCode.TailCall)
+                {
+                    return false;
+                }
+            }
+
             if (proto.LineInfo[i] != currentLine)
             {
                 var key = (proto, i);
@@ -373,7 +386,7 @@ class MinimalDebugger : IDebugger
     // New IDebugger methods for call stack notifications
     public void OnPushCallStackFrame(LuaState thread)
     {
-        //RpcServer .WriteToConsole($"[Lua.DebugServer] OnPushCallStackFrame (stepMode={stepMode})");
+        RpcServer.WriteToConsole($"[Lua.DebugServer] OnPushCallStackFrame (stepMode={stepMode})");
 
         if (stepMode == StepMode.In)
         {
@@ -405,15 +418,45 @@ class MinimalDebugger : IDebugger
                     // Keep stepMode active until the trap fires
                 }
             }
+            else
+            {
+                // var caller = thread.GetCallStackFrames()[^2];
+                // if (caller.Function is LuaClosure callerClosure)
+                // {
+                //     LuaDebugSession.Current?.UpdateStoppedContext(thread, f.CallerInstructionIndex, callerClosure);
+                //
+                //     var callerProto = callerClosure.Proto;
+                //     var file = callerProto.ChunkName.TrimStart('@');
+                //     {
+                //         // line is defined above
+                //         var line = callerProto.LineInfo[f.CallerInstructionIndex];
+                //         
+                //         // Pause
+                //         LuaDebugSession.PauseForBreakpoint(file, line);
+                //     }
+                // }
+            }
+        }
+
+        if (stepMode == StepMode.Over)
+        {
+            pushCount++;
         }
     }
 
     public void OnPopCallStackFrame(LuaState thread)
     {
-        //RpcServer .WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame (stepMode={stepMode})");
+        RpcServer.WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame (stepMode={stepMode})");
 
-        if (stepMode == StepMode.Out)
+        if (stepMode != StepMode.None)
         {
+            if (stepMode == StepMode.Over)
+            {
+                pushCount--;
+                if (pushCount > 0) return;
+                stepMode = StepMode.None;
+            }
+
             if (stepBreak is not null)
             {
                 DebugUtility.PatchInstruction(stepBreak.Value.Key.proto, stepBreak.Value.Key.index, stepBreak.Value.Value);
@@ -423,7 +466,7 @@ class MinimalDebugger : IDebugger
             // After pop, current frame is caller; arm a step at the next different line after the call site
             var f = thread.GetCurrentFrame();
             var caller = thread.GetCallStackFrames()[^2];
-            if (caller.Function is LuaClosure clo)
+            if (f.Function is LuaClosure && caller.Function is LuaClosure clo)
             {
                 var p = clo.Proto;
                 var pc = Math.Max(0, f.CallerInstructionIndex);
@@ -453,7 +496,7 @@ class MinimalDebugger : IDebugger
     }
 
     // Helpers to start step-in/out from session
-    public void StartStepIn()
+    public void StartStepIn(Prototype proto, int pc)
     {
         lock (sync)
         {
@@ -463,8 +506,8 @@ class MinimalDebugger : IDebugger
                 stepBreak = null;
             }
 
+            SetStepToNextLine(proto, pc, true);
             stepMode = StepMode.In;
-
             //RpcServer .WriteToConsole($"[Lua.DebugServer] Step-In armed");
         }
     }
@@ -473,12 +516,7 @@ class MinimalDebugger : IDebugger
     {
         lock (sync)
         {
-            if (stepBreak is { } sb)
-            {
-                DebugUtility.PatchInstruction(sb.Key.proto, sb.Key.index, sb.Value);
-                stepBreak = null;
-            }
-
+            DeleteStepBreak();
             stepMode = StepMode.Out;
         }
     }
@@ -506,5 +544,23 @@ class MinimalDebugger : IDebugger
         original = default;
         isStep = false;
         return false;
+    }
+
+    public Instruction GetOriginalInstruction(Prototype proto, int index)
+    {
+        lock (sync)
+        {
+            if (stepBreak is { } sb && sb.Key.proto == proto && sb.Key.index == index)
+            {
+                return sb.Value;
+            }
+
+            if (breakpoints.TryGetValue((proto, index), out var old))
+            {
+                return old;
+            }
+        }
+
+        return proto.Code[index];
     }
 }

@@ -522,7 +522,8 @@ sealed class LuaDebugSession
     public void StepIn()
     {
         if (debugger is null) return;
-        debugger.StartStepIn();
+        stepDepth = lastDepth;
+        debugger.StartStepIn(lastProto, lastPc);
     }
 
     public void StepOut()

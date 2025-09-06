@@ -9,8 +9,8 @@ end
 
 for i = 1, 10, 3 do
   local z = add(i)
-  print("x + y + i:", z)
+  printer.print("x + y + i:", z)
   x  = x + 1
 end
 
-printer.print("end")
+print("end")
