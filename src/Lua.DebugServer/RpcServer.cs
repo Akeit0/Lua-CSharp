@@ -90,6 +90,9 @@ static class RpcServer
                     case "getBytecode":
                         HandleGetBytecode(id);
                         break;
+                    case "getStack":
+                        HandleGetStack(id);
+                        break;
                     case "terminate":
                         WriteResponse(id, new { });
                         return;
@@ -306,6 +309,12 @@ static class RpcServer
         }
 
         WriteResponse(id, result);
+    }
+
+    static void HandleGetStack(string? id)
+    {
+        var frames = LuaDebugSession.Current?.GetCallStack() ?? Array.Empty<object>();
+        WriteResponse(id, new { frames });
     }
 
     static void HandleGetInstrBreakpoints(string? id, JsonElement @params)

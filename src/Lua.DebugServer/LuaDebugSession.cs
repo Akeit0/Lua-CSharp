@@ -17,6 +17,7 @@ sealed class LuaDebugSession
     int lastPc;
     bool isSteppingNext;
     int lastDepth;
+    LuaState? lastThread;
 
     int stepDepth;
 
@@ -261,6 +262,7 @@ sealed class LuaDebugSession
     {
         lock (locals)
         {
+            lastThread = thread;
             // Adopt the running state for globals snapshot in attach scenarios
             this.state = thread;
             locals.Clear();
@@ -591,6 +593,52 @@ sealed class LuaDebugSession
         lock (locals)
         {
             return isSteppingNext;
+        }
+    }
+
+    public object[] GetCallStack()
+    {
+        lock (locals)
+        {
+            var list = new List<object>();
+            try
+            {
+                if (lastThread is not null)
+                {
+                    var frames = lastThread.GetCallStackFrames();
+                    int n = frames.Length;
+                    for (int i = n - 1, id = 1; i >= 0; i--, id++)
+                    {
+                        var f = frames[i];
+                        if (f.Function is LuaClosure clo)
+                        {
+                            var p = clo.Proto;
+                            int pc = 0;
+                            if (i == n - 1) pc = Math.Max(0, lastPc);
+                            else pc = Math.Max(0, frames[i + 1].CallerInstructionIndex);
+                            int line = (pc >= 0 && pc < p.LineInfo.Length) ? p.LineInfo[pc] : 1;
+                            var file = p.ChunkName.TrimStart('@');
+                            file = ResolveSourcePath(file) ?? file;
+                            var name = System.IO.Path.GetFileName(file);
+                            list.Add(new { id, name, file, line });
+                        }
+                    }
+                }
+
+                if (list.Count == 0 && lastProto is not null)
+                {
+                    var file = lastProto.ChunkName.TrimStart('@');
+                    file = ResolveSourcePath(file) ?? file;
+                    var name = System.IO.Path.GetFileName(file);
+                    list.Add(new { id = 1, name, file, line = Math.Max(1, lastPc < lastProto.LineInfo.Length ? lastProto.LineInfo[lastPc] : 1) });
+                }
+            }
+            catch
+            {
+                /* ignore */
+            }
+
+            return list.ToArray();
         }
     }
 

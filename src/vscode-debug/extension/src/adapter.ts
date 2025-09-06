@@ -370,22 +370,33 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response: DebugProtocol.StackTraceResponse,
     args: DebugProtocol.StackTraceArguments
   ): void {
-    const sf: DebugProtocol.StackFrame[] = [];
-    const file = this.lastStopped?.file;
-    const line = this.lastStopped?.line ?? 1;
-    if (file) {
-      sf.push({
-        id: 1,
-        name: 'Lua',
-        line,
-        column: 1,
-        source: { path: file, name: path.basename(file) },
+    this.rpcCall('getStack')
+      .then((res) => {
+        const frames = (res?.frames ?? []) as { id: number; name: string; file: string; line: number }[];
+        const sfs: DebugProtocol.StackFrame[] = frames.map((f) => ({
+          id: f.id,
+          name: f.name || 'Lua',
+          line: f.line || 1,
+          column: 1,
+          source: f.file ? { path: f.file, name: path.basename(f.file) } : undefined,
+        }));
+        response.body = { stackFrames: sfs, totalFrames: sfs.length };
+        this.sendResponse(response);
+      })
+      .catch((err) => {
+        this.sendEvent(new OutputEvent(`[lua-csharp] getStack error: ${err}\n`));
+        // Fallback to last stopped location
+        const sf: DebugProtocol.StackFrame[] = [];
+        const file = this.lastStopped?.file;
+        const line = this.lastStopped?.line ?? 1;
+        if (file) {
+          sf.push({ id: 1, name: 'Lua', line, column: 1, source: { path: file, name: path.basename(file) } });
+        } else {
+          sf.push({ id: 1, name: 'Lua', line: line, column: 1 });
+        }
+        response.body = { stackFrames: sf, totalFrames: sf.length };
+        this.sendResponse(response);
       });
-    } else {
-      sf.push({ id: 1, name: 'Lua', line: line, column: 1 });
-    }
-    response.body = { stackFrames: sf, totalFrames: sf.length };
-    this.sendResponse(response);
   }
 
   // Provide a single empty Locals scope for now
