@@ -312,10 +312,10 @@ public class LuaState : IDisposable
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrame()
     {
-        Debugger?.OnPopCallStackFrame(this);
         var coreData = this.coreData!;
         ref var callStack = ref coreData.CallStack;
         var popFrame = callStack.Pop();
+        Debugger?.OnPopCallStackFrame(this, ref popFrame);
         if (CurrentException != null)
         {
             ExceptionTrace.Push(popFrame);

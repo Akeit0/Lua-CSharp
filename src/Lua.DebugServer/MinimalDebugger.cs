@@ -465,11 +465,6 @@ class MinimalDebugger : IDebugger
 
         var currentInstruction = GetOriginalInstruction(proto, pc);
 
-        if (stepIn && currentInstruction.OpCode is OpCode.Call or OpCode.TailCall)
-        {
-            return false;
-        }
-
         var nextPc = pc + 1;
         var state = this.lastThread!;
         var stack = state.Stack.AsSpan();
@@ -543,7 +538,7 @@ class MinimalDebugger : IDebugger
     // New IDebugger methods for call stack notifications
     public void OnPushCallStackFrame(LuaState thread)
     {
-        //RpcServer.WriteToConsole($"[Lua.DebugServer] OnPushCallStackFrame (stepMode={stepMode})");
+        RpcServer.WriteToConsole($"[Lua.DebugServer] OnPushCallStackFrame (stepMode={stepMode})");
 
         if (stepMode == StepMode.In)
         {
@@ -552,31 +547,14 @@ class MinimalDebugger : IDebugger
             if (f.Function is LuaClosure clo)
             {
                 var p = clo.Proto;
-                var key = (p, 0);
-                lock (sync)
-                {
-                    if (stepBreak is not null)
-                    {
-                        if (stepBreak.Value.Key == key) return;
-                        DebugUtility.PatchInstruction(stepBreak.Value.Key.proto, stepBreak.Value.Key.index, stepBreak.Value.Value);
-                    }
-
-                    if (!breakpoints.TryGetValue(key, out var oldInstruction))
-                    {
-                        oldInstruction = DebugUtility.PatchDebugInstruction(p, 0);
-                        stepBreak = new KeyValuePair<(Prototype, int), Instruction>(key, oldInstruction);
-                        //RpcServer.WriteToConsole($"[Lua.DebugServer] Step-In armed at {p.ChunkName.TrimStart('@')}:{p.LineInfo[0]} (instruction 0) {oldInstruction}");
-                    }
-                    else
-                    {
-                        //RpcServer.WriteToConsole($"[Lua.DebugServer] Step-In: callee already has a breakpoint at {p.ChunkName.TrimStart('@')}:{p.LineInfo[0]} (instruction 0) {oldInstruction}");
-                    }
-
-                    // Keep stepMode active until the trap fires
-                }
+                LuaDebugSession.Current?.UpdateStoppedContext(thread, 0, clo);
+                var file = p.ChunkName.TrimStart('@');
+                var line = p.LineInfo[0];
+                LuaDebugSession.PauseForBreakpoint(file, line);
             }
             else
             {
+                //RpcServer.WriteLogToConsole($"[Lua.DebugServer] OnPushCallStackFrame: callee is not a LuaClosure");
                 // var caller = thread.GetCallStackFrames()[^2];
                 // if (caller.Function is LuaClosure callerClosure)
                 // {
@@ -601,7 +579,7 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public void OnPopCallStackFrame(LuaState thread)
+    public void OnPopCallStackFrame(LuaState thread , ref CallStackFrame poppedFrame)
     {
         //RpcServer.WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame (stepMode={stepMode})");
 
@@ -612,38 +590,20 @@ class MinimalDebugger : IDebugger
                 pushCount--;
                 if (pushCount > 0) return;
                 stepMode = StepMode.None;
+                return;
             }
-
-            if (stepBreak is not null)
-            {
-                DebugUtility.PatchInstruction(stepBreak.Value.Key.proto, stepBreak.Value.Key.index, stepBreak.Value.Value);
-                stepBreak = null;
-            }
-
             // After pop, current frame is caller; arm a step at the next different line after the call site
-            var f = thread.GetCurrentFrame();
-            var caller = thread.GetCallStackFrames()[^2];
+            var f = poppedFrame;
+            var caller = thread.GetCurrentFrame();
             if (f.Function is LuaClosure && caller.Function is LuaClosure clo)
             {
                 var p = clo.Proto;
-                var pc = Math.Max(0, f.CallerInstructionIndex);
-                int i = pc + 1;
-                var key = (p, i);
-                Instruction oldInstruction;
-                lock (sync)
-                {
-                    if (!breakpoints.TryGetValue(key, out oldInstruction))
-                    {
-                        oldInstruction = DebugUtility.PatchDebugInstruction(p, i);
-                        stepBreak = new KeyValuePair<(Prototype, int), Instruction>(key, oldInstruction);
-                        //RpcServer.WriteToConsole($"[Lua.DebugServer] Step-Out armed at {p.ChunkName.TrimStart('@')}:{p.LineInfo[i]} (instruction {i}) {oldInstruction}");
-                    }
-                    else
-                    {
-                        //  RpcServer .WriteToConsole($"[Lua.DebugServer] Step-Out: caller already has a breakpoint at {p.ChunkName.TrimStart('@')}:{p.LineInfo[i]} (instruction {i}) {oldInstruction}");
-                    }
-                    // Keep stepMode active until the trap fires
-                }
+                var callPc = f.CallerInstructionIndex;
+                LuaDebugSession.Current?.UpdateStoppedContext(thread, callPc, clo);
+                var file = p.ChunkName.TrimStart('@');
+                var line = p.LineInfo[callPc];
+                RpcServer.WriteLogToConsole ($"[Lua.DebugServer] Step-Out to {file}:{line} (instruction {callPc})");
+                LuaDebugSession.PauseForBreakpoint(file, line);
             }
             else
             {

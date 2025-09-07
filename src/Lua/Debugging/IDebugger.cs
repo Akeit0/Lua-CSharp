@@ -14,8 +14,9 @@ public interface IDebugger
     void OnPushCallStackFrame(LuaState thread);
 
     /// <summary>
-    /// called before a call stack frame is popped
+    /// called after a call stack frame is popped
     /// </summary>
     /// <param name="thread"></param>
-    void OnPopCallStackFrame(LuaState thread);
+    ///  <param name="poppedFrame"></param>
+    void OnPopCallStackFrame(LuaState thread,ref CallStackFrame poppedFrame);
 }
