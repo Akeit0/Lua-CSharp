@@ -56,11 +56,17 @@ If you see an esbuild platform mismatch (e.g. Windows node_modules on WSL), remo
 
 3) Start debugging. When execution stops, inspect Locals/Globals/Upvalues in the Variables view. Edit Local/Upvalue values inline (supported: `true`/`false`, numbers like `3.14`, strings like `hello` or `"hello"`).
 
-4) Bytecode Viewer (optional):
+4) Bytecode Viewer:
 
-- Command Palette → “Lua: Show Bytecode” to open the panel
-- Or enable auto‑open on stop via the setting `Lua‑CSharp > Bytecode Viewer: Open On Stop`
+- Command Palette → “Lua: Bytecode Viewer” toggles the panel at any time. If no debug session is active, it toggles a placeholder view.
+- When a Lua‑CSharp debug session starts, if the placeholder is already open it will switch to the live viewer. If the panel is not open, it will not auto‑open on start.
+- To also pop open on every stop (when already live), enable `Lua‑CSharp > Bytecode Viewer: Open On Stop`.
+- When the debug session ends, the live viewer turns back into a placeholder and stays open.
 - In the panel, click an instruction row to toggle an instruction‑level breakpoint (●/○ indicator)
+
+### Status Bar
+
+- A status bar button “Bytecode” triggers the same toggle behavior as the command.
 
 ## Settings
 
@@ -69,7 +75,7 @@ If you see an esbuild platform mismatch (e.g. Windows node_modules on WSL), remo
 
 ## Commands
 
-- `Lua: Show Bytecode` (`lua-csharp.showBytecode`): open/focus the Bytecode Viewer
+- `Lua: Bytecode Viewer` (`lua-csharp.showBytecode`): toggle the viewer. With an active debug session it toggles the live viewer; without a session it toggles a placeholder.
 
 ## Notes & Limitations
 

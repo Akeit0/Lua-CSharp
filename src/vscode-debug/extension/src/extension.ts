@@ -1,8 +1,10 @@
 import * as vscode from 'vscode';
 import { LuaCSharpDebugSession } from './adapter';
+import { panelHost } from './panelHost';
 
 export function activate(context: vscode.ExtensionContext) {
   const type = 'lua-csharp';
+  let statusItem: vscode.StatusBarItem | undefined;
 
   // Provide default debug configuration
   context.subscriptions.push(
@@ -14,18 +16,21 @@ export function activate(context: vscode.ExtensionContext) {
     vscode.debug.registerDebugAdapterDescriptorFactory(type, new InlineFactory())
   );
 
-  // Command: Show Bytecode Viewer
+  // Command: Bytecode Viewer (toggle behavior)
   context.subscriptions.push(
     vscode.commands.registerCommand('lua-csharp.showBytecode', async () => {
       const ses = vscode.debug.activeDebugSession;
       if (!ses || ses.type !== type) {
-        vscode.window.showInformationMessage('Start a Lua-CSharp debug session to show bytecode.');
+        // Toggle placeholder when no session
+        if (panelHost.isOpen()) panelHost.disposePanel();
+        else panelHost.showPlaceholder();
         return;
       }
+      // With active lua-csharp session, toggle live viewer via adapter
       try {
-        await ses.customRequest('showBytecode');
+        await ses.customRequest('toggleBytecode');
       } catch (e: any) {
-        vscode.window.showErrorMessage(`Show Bytecode failed: ${e?.message ?? e}`);
+        vscode.window.showErrorMessage(`Bytecode Viewer toggle failed: ${e?.message ?? e}`);
       }
     })
   );
@@ -70,6 +75,25 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider(selector, new LuaFunctionCodeLensProvider())
   );
+
+  // Auto-open the bytecode viewer when a Lua-CSharp debug session starts
+  context.subscriptions.push(
+    vscode.debug.onDidStartDebugSession(async (ses) => {
+      if (ses.type !== type) return;
+      // Only switch to live viewer if a panel is already open (placeholder or live)
+      if (panelHost.isOpen()) {
+        try { await ses.customRequest('showBytecode'); } catch {}
+      }
+    })
+  );
+
+  // Status bar toggle
+  statusItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 10000);
+  statusItem.text = '$(list-unordered) Bytecode';
+  statusItem.tooltip = 'Toggle Lua Bytecode Viewer';
+  statusItem.command = 'lua-csharp.showBytecode';
+  statusItem.show();
+  context.subscriptions.push(statusItem);
 }
 
 export function deactivate() {}

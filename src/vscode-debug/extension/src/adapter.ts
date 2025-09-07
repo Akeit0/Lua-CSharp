@@ -15,6 +15,7 @@ import * as path from 'node:path';
 import * as fs from 'node:fs';
 import * as readline from 'node:readline';
 import * as vscode from 'vscode';
+import { panelHost } from './panelHost';
 import * as net from 'node:net';
 
 export class LuaCSharpDebugSession extends LoggingDebugSession {
@@ -35,7 +36,6 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   private localsRef = 0;
   private globalsRef = 0;
   private upvaluesRef = 0;
-  private panel?: vscode.WebviewPanel;
   private lastBytecodeChunk?: string;
   private pendingBps = new Map<string, { line: number; condition?: string; hitCondition?: string; logMessage?: string }[]>();
   private initializedSent = false;
@@ -120,6 +120,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       this.sendEvent(new OutputEvent(String(buf)));
     });
     this.proc.on('exit', () => {
+      this.setPanelToPlaceholder();
       this.sendEvent(new TerminatedEvent());
     });
 
@@ -152,7 +153,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       sock.on('error', reject);
       const rl = readline.createInterface({ input: sock, crlfDelay: Infinity });
       rl.on('line', (line) => this.handleHostLine(line));
-      sock.on('close', () => this.sendEvent(new TerminatedEvent()));
+      sock.on('close', () => { this.setPanelToPlaceholder(); this.sendEvent(new TerminatedEvent()); });
     });
 
     // Initialize the server side
@@ -175,6 +176,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response: DebugProtocol.DisconnectResponse,
     _args: DebugProtocol.DisconnectArguments
   ): void {
+    // If a viewer is open, turn it into a placeholder instead of closing
+    this.setPanelToPlaceholder();
     if (this.proc && !this.proc.killed) {
       this.rpcSend({ method: 'terminate' });
       this.proc.kill();
@@ -299,7 +302,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           this.frameByVarRef.clear();
           this.sendEvent(new StoppedEvent(reason, this.threadId));
             // Update bytecode viewer if open; otherwise open if configured
-            if (this.panel) {
+            if (panelHost.isOpen()) {
               this.renderBytecode();
             } else if (this.shouldAutoOpenPanel()) {
               this.ensurePanel();
@@ -308,6 +311,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             break;
           }
           case 'terminated':
+            this.setPanelToPlaceholder();
             this.sendEvent(new TerminatedEvent());
             break;
         }
@@ -335,6 +339,15 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     if (command === 'showBytecode') {
       this.ensurePanel();
       this.renderBytecode();
+      this.sendResponse(response);
+      return;
+    } else if (command === 'toggleBytecode') {
+      if (panelHost.isOpen()) {
+        panelHost.disposePanel();
+      } else {
+        this.ensurePanel();
+        this.renderBytecode();
+      }
       this.sendResponse(response);
       return;
     } else if (command === 'findPrototype') {
@@ -367,8 +380,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           const bpsRes = await this.rpcCall('getInstrBreakpoints', { chunk });
           const indices: number[] = bpsRes?.breakpoints ?? [];
           const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices));
-          this.panel!.title = `Lua Bytecode: ${path.basename(chunk || 'function')}`;
-          this.panel!.webview.html = html;
+          panelHost.setHtml(`Lua Bytecode: ${path.basename(chunk || 'function')}`, html);
           this.sendResponse(response);
         })
         .catch((err) => {
@@ -589,7 +601,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
-          if (this.panel) this.renderBytecode();
+          if (panelHost.isOpen()) this.renderBytecode();
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getUpvalues error: ${err}\n`));
@@ -642,19 +654,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
 
   // Bytecode webview helpers
   private ensurePanel() {
-    if (this.panel) {
-      return;
-    }
-    this.panel = vscode.window.createWebviewPanel(
-      'luaBytecode',
-      'Lua Bytecode',
-      vscode.ViewColumn.Beside,
-      { enableFindWidget: true, enableScripts: true }
-    );
-    this.panel.onDidDispose(() => {
-      this.panel = undefined;
-    });
-    this.panel.webview.onDidReceiveMessage(async (msg) => {
+    const panel = panelHost.ensurePanel();
+    panelHost.setMessageHandler(async (msg) => {
       if (msg && msg.cmd === 'toggleInstrBp') {
         if (!this.lastBytecodeChunk) return;
         const index = Number(msg.index);
@@ -679,8 +680,33 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     });
   }
 
+  private buildPlaceholderHtml(): string {
+    return `<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8" />
+<style>
+  body { font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px; color: var(--vscode-foreground); }
+  .wrap { padding: 10px; }
+  .title { font-weight: 600; margin-bottom: 6px; }
+  .hint { color: var(--vscode-descriptionForeground); }
+  code { background: var(--vscode-textBlockQuote-background); padding: 2px 4px; border-radius: 3px; }
+</style>
+<title>Lua Bytecode</title></head>
+<body>
+  <div class="wrap">
+    <div class="title">Lua Bytecode Viewer</div>
+    <div class="hint">Start a Lua-CSharp debug session to view live bytecode.<br/>
+    Use <code>Run and Debug</code> or your launch config. This panel will switch to the live viewer once debugging starts.</div>
+  </div>
+</body></html>`;
+  }
+
+  private setPanelToPlaceholder() {
+    if (!panelHost.isOpen()) return; // do not create new panel on end
+    panelHost.showPlaceholder(this.buildPlaceholderHtml());
+  }
+
   private async renderBytecode() {
-    if (!this.panel) return;
+    if (!panelHost.isOpen()) return;
     try {
       const fid = this.currentFrameId || 1;
       console .log(`Rendering bytecode for frame ${fid}`);
@@ -701,8 +727,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       const bpsRes = await this.rpcCall('getInstrBreakpoints', { chunk });
       const indices: number[] = bpsRes?.breakpoints ?? [];
       const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices));
-      this.panel.title = `Lua Bytecode: ${path.basename(chunk || 'current')}`;
-      this.panel.webview.html = html;
+      panelHost.setHtml(`Lua Bytecode: ${path.basename(chunk || 'current')}`, html);
     } catch (err) {
       this.sendEvent(new OutputEvent(`[lua-csharp] getBytecode error: ${err}\n`));
     }

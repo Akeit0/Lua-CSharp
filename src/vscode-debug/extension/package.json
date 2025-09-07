@@ -32,7 +32,7 @@
     "commands": [
       {
         "command": "lua-csharp.showBytecode",
-        "title": "Lua: Show Bytecode",
+        "title": "Lua: Bytecode Viewer",
         "category": "Lua-CSharp"
       },
       {
