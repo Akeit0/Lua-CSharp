@@ -84,9 +84,11 @@ class MinimalDebugger : IDebugger
     int pushCount = 0;
     readonly object sync = new();
 
-    enum StepMode { None, Over, In, Out }
+
 
     StepMode stepMode = StepMode.None;
+    
+    StepOverMode stepOverMode = StepOverMode.Line;
 
     public void RegisterPrototype(Prototype proto)
     {
@@ -454,7 +456,23 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public bool SetStepToNextLine(Prototype proto, int pc, bool stepIn = false)
+    public void SetStepOverMode(StepOverMode mode)
+    {
+        lock (sync)
+        {
+            stepOverMode = mode;
+        }
+    }
+    
+    public StepOverMode GetStepOverMode()
+    {
+        lock (sync)
+        {
+            return stepOverMode;
+        }
+    }
+
+    public bool SetStepToNext(Prototype proto, int pc, bool stepIn = false)
     {
         pushCount = 0;
         // Restore any previous step trap and remove it from the breakpoint map
@@ -510,7 +528,7 @@ class MinimalDebugger : IDebugger
                 }
             }
 
-            if (proto.LineInfo[i] != currentLine)
+            if (stepOverMode ==StepOverMode.Instruction||proto.LineInfo[i] != currentLine)
             {
                 var key = (proto, i);
                 lock (sync)
@@ -617,7 +635,7 @@ class MinimalDebugger : IDebugger
     {
         lock (sync)
         {
-            SetStepToNextLine(proto, pc, stepIn: true);
+            SetStepToNext(proto, pc, stepIn: true);
             stepMode = StepMode.In;
             //RpcServer .WriteToConsole($"[Lua.DebugServer] Step-In armed");
         }
@@ -896,4 +914,10 @@ class MinimalDebugger : IDebugger
 
         RpcServer.WriteToConsole(sb.ToString(), "stdout");
     }
+}
+
+enum StepMode { None, Over, In, Out }
+public enum StepOverMode
+{
+    Line, Instruction
 }

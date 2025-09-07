@@ -24,7 +24,6 @@ static class RpcServer
         while ((line = await input.ReadLineAsync()) is not null)
         {
             if (string.IsNullOrWhiteSpace(line)) continue;
-            WriteToConsole($"=> {line}");
             try
             {
                 var doc = JsonDocument.Parse(line);
@@ -32,7 +31,6 @@ static class RpcServer
                 var id = root.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
                 var method = root.GetProperty("method").GetString();
                 var @params = root.TryGetProperty("params", out var p) ? p : default;
-                if (method is "next" or "continue" or "stepIn" or "stepOut") WriteLogToConsole($"<= {method}");
 
                 switch (method)
                 {
@@ -40,10 +38,7 @@ static class RpcServer
                         WriteResponse(id, new { message = "pong" });
                         break;
                     case "initialize":
-                        if (LuaDebugSession.Current is null)
-                        {
-                            LuaDebugSession.Current = new LuaDebugSession();
-                        }
+                        LuaDebugSession.Current ??= new();
 
                         WriteEvent("initialized", new { });
                         WriteResponse(id, new { capabilities = new { } });
@@ -95,6 +90,12 @@ static class RpcServer
                         break;
                     case "findPrototype":
                         HandleFindPrototype(id, @params);
+                        break;
+                    case "getOptions":
+                        HandleGetOptions(id);
+                        break;
+                    case "setStepOverMode":
+                        HandleSetStepOverMode(id, @params);
                         break;
                     case "terminate":
                         WriteResponse(id, new { });
@@ -197,10 +198,7 @@ static class RpcServer
                     list.Add((l, null, null, null));
         }
 
-        if (LuaDebugSession.Current is null)
-        {
-            LuaDebugSession.Current = new LuaDebugSession();
-        }
+        LuaDebugSession.Current ??= new LuaDebugSession();
 
         LuaDebugSession.Current.SetBreakpoints(source, list);
         WriteResponse(id, new { breakpoints = list.Select(l => new { verified = true, line = l.line }).ToArray() });
@@ -212,10 +210,7 @@ static class RpcServer
         var cwd = @params.TryGetProperty("cwd", out var cEl) ? cEl.GetString() : null;
         var stopOnEntry = @params.TryGetProperty("stopOnEntry", out var sEl) && sEl.GetBoolean();
 
-        if (LuaDebugSession.Current is null)
-        {
-            LuaDebugSession.Current = new LuaDebugSession();
-        }
+        LuaDebugSession.Current ??= new LuaDebugSession();
 
         await LuaDebugSession.Current.LaunchAsync(program, cwd, stopOnEntry);
         WriteResponse(id, new { });
@@ -268,6 +263,21 @@ static class RpcServer
     {
         var globals = LuaDebugSession.Current?.GetGlobals() ?? Array.Empty<object>();
         WriteResponse(id, new { variables = globals });
+    }
+
+    static void HandleGetOptions(string? id)
+    {
+        var mode = MinimalDebugger.Active?.GetStepOverMode().ToString() ?? "Line";
+        WriteResponse(id, new { stepOverMode = mode });
+    }
+
+    static void HandleSetStepOverMode(string? id, JsonElement @params)
+    {
+        var text = @params.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String ? (m.GetString() ?? "Line") : "Line";
+        StepOverMode mode;
+        if (!Enum.TryParse<StepOverMode>(text, ignoreCase: true, out mode)) mode = StepOverMode.Line;
+        MinimalDebugger.Active?.SetStepOverMode(mode);
+        WriteResponse(id, new { stepOverMode = mode.ToString() });
     }
 
     static void HandleGetUpvalues(string? id, JsonElement @params)

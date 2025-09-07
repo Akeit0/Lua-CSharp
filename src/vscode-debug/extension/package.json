@@ -15,6 +15,7 @@
   "activationEvents": [
     "onDebugResolve:lua-csharp",
     "onCommand:lua-csharp.showBytecode",
+    "onCommand:lua-csharp.debugOptions",
     "onCommand:lua-csharp.findPrototypeAtCursor",
     "onLanguage:lua"
   ],
@@ -33,6 +34,11 @@
       {
         "command": "lua-csharp.showBytecode",
         "title": "Lua: Bytecode Viewer",
+        "category": "Lua-CSharp"
+      },
+      {
+        "command": "lua-csharp.debugOptions",
+        "title": "Lua: Debugger Options",
         "category": "Lua-CSharp"
       },
       {

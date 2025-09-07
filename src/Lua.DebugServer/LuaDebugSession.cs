@@ -573,7 +573,7 @@ sealed class LuaDebugSession
         if (debugger is null || lastProto is null) return;
         isSteppingNext = true;
         stepDepth = lastDepth;
-        debugger.SetStepToNextLine(lastProto, lastPc);
+        debugger.SetStepToNext(lastProto, lastPc);
     }
 
     public void StepIn()

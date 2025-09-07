@@ -362,6 +362,17 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           this.sendResponse(response);
         });
       return;
+    } else if (command === 'getOptions') {
+      this.rpcCall('getOptions')
+        .then((res) => { (response as any).body = res || {}; this.sendResponse(response); })
+        .catch((err) => { (response as any).body = { error: String(err) }; this.sendResponse(response); });
+      return;
+    } else if (command === 'setStepOverMode') {
+      const mode = _args?.mode;
+      this.rpcCall('setStepOverMode', { mode })
+        .then((res) => { (response as any).body = res || {}; this.sendResponse(response); })
+        .catch((err) => { (response as any).body = { error: String(err) }; this.sendResponse(response); });
+      return;
     } else if (command === 'showPrototypeAt') {
       // Find and render prototype snapshot for file+line
       this.ensurePanel();
@@ -370,6 +381,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           if (!res) { this.sendResponse(response); return; }
           const stackRes = await this.rpcCall('getStack');
           const frames: { id: number; name: string; file: string; line: number }[] = stackRes?.frames ?? [];
+          const optRes = await this.rpcCall('getOptions');
+          const stepOverMode = String(optRes?.stepOverMode ?? 'Line');
           const chunk = (res?.chunk as string) || '';
           const pc = (res?.pc as number) ?? -1;
           const instr: { index: number; line: number; text: string; childIndex?: number }[] = res?.instructions ?? [];
@@ -379,7 +392,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           this.lastBytecodeChunk = chunk;
           const bpsRes = await this.rpcCall('getInstrBreakpoints', { chunk });
           const indices: number[] = bpsRes?.breakpoints ?? [];
-          const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices));
+          const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices), stepOverMode);
           panelHost.setHtml(`Lua Bytecode: ${path.basename(chunk || 'function')}`, html);
           this.sendResponse(response);
         })
@@ -676,6 +689,14 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
           this.currentFrameId = fid;
           await this.renderBytecode();
         }
+      } else if (msg && msg.cmd === 'setStepOverMode') {
+        const mode = String(msg.mode || 'Line');
+        try {
+          await this.rpcCall('setStepOverMode', { mode });
+          await this.renderBytecode();
+        } catch (e) {
+          this.sendEvent(new OutputEvent(`[lua-csharp] setStepOverMode error: ${e}\n`));
+        }
       }
     });
   }
@@ -717,6 +738,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       }
       const stackRes = await this.rpcCall('getStack');
       const frames: { id: number; name: string; file: string; line: number }[] = stackRes?.frames ?? [];
+      const optRes = await this.rpcCall('getOptions');
+      const stepOverMode = String(optRes?.stepOverMode ?? 'Line');
       const chunk = (res?.chunk as string) || '';
       const pc = (res?.pc as number) ?? -1;
       const instr: { index: number; line: number; text: string; childIndex?: number }[] = res?.instructions ?? [];
@@ -726,7 +749,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       this.lastBytecodeChunk = chunk;
       const bpsRes = await this.rpcCall('getInstrBreakpoints', { chunk });
       const indices: number[] = bpsRes?.breakpoints ?? [];
-      const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices));
+      const html = this.buildHtml(chunk, pc, instr, constants, locals, upvalues, new Set(indices), stepOverMode);
       panelHost.setHtml(`Lua Bytecode: ${path.basename(chunk || 'current')}`, html);
     } catch (err) {
       this.sendEvent(new OutputEvent(`[lua-csharp] getBytecode error: ${err}\n`));
@@ -740,7 +763,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     constants: string[],
     locals: { name: string; startPc: number; endPc: number }[],
     upvalues: { name: string; isLocal: boolean; index: number }[],
-    bpSet: Set<number>
+    bpSet: Set<number>,
+    stepOverMode: string
   ): string {
     const rows = instr
       .map((i) => {
@@ -773,6 +797,8 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       })
       .join('');
     const head = this.escapeHtml(chunk || '');
+    const isLine = stepOverMode === 'Line';
+    const isInstr = stepOverMode === 'Instruction';
     return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -780,6 +806,9 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   <style>
     body { font-family: var(--vscode-editor-font-family, ui-monospace, monospace); font-size: 12px; }
     .header { margin: 6px 0 8px; color: var(--vscode-foreground); }
+    .toolbar { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+    .btn { padding: 2px 6px; border: 1px solid var(--vscode-editorWidget-border); background: var(--vscode-editorWidget-background); color: var(--vscode-foreground); cursor: pointer; border-radius: 3px; }
+    .btn.active { background: var(--vscode-button-background); color: var(--vscode-button-foreground); border-color: var(--vscode-button-background); }
     .grid { border-top: 1px solid var(--vscode-editorWidget-border); }
     .row { display: grid; grid-template-columns: 80px 60px 1fr; padding: 2px 6px; border-bottom: 1px solid var(--vscode-editorWidget-border); }
     .row:nth-child(even) { background: var(--vscode-editorInlayHint-background, transparent); }
@@ -801,6 +830,11 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   </head>
 <body>
   <div class="header">${head}</div>
+  <div class="toolbar">
+    <span class="label">Step Over:</span>
+    <button class="btn ${isLine ? 'active' : ''}" data-mode="Line">Line</button>
+    <button class="btn ${isInstr ? 'active' : ''}" data-mode="Instruction">Instruction</button>
+  </div>
   <div class="grid">${rows}</div>
   <div class="hint">Click a row to toggle an instruction breakpoint.</div>
   <div class="section">
@@ -820,18 +854,6 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       `
 <script>
   const vscode = acquireVsCodeApi();
-  const framesEl = document.getElementById('frames');
-  if (framesEl) {
-    framesEl.addEventListener('click', (ev) => {
-      const t = ev.target as HTMLElement;
-      if (!t || !t.classList || !t.classList.contains('frame')) return;
-      const fidAttr = t.getAttribute('data-fid');
-      if (!fidAttr) return;
-      const fid = Number(fidAttr);
-      if (!Number.isFinite(fid)) return;
-      vscode.postMessage({ cmd: 'selectFrame', frameId: fid });
-    });
-  }
   document.querySelectorAll('.grid .row').forEach((row) => {
     row.addEventListener('click', () => {
       const idxAttr = row.getAttribute('data-idx');
@@ -840,6 +862,13 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       if (!Number.isFinite(idxNum)) return;
       const has = row.getAttribute('data-has') === '1';
       vscode.postMessage({ cmd: 'toggleInstrBp', index: idxNum, has });
+    });
+  });
+  document.querySelectorAll('.toolbar .btn').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      const mode = btn.getAttribute('data-mode');
+      if (!mode) return;
+      vscode.postMessage({ cmd: 'setStepOverMode', mode });
     });
   });
 </script>`;

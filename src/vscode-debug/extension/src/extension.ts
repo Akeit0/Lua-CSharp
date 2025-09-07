@@ -67,6 +67,32 @@ export function activate(context: vscode.ExtensionContext) {
     })
   );
 
+  // Command: Debugger Options (toggle StepOver granularity)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('lua-csharp.debugOptions', async () => {
+      const ses = vscode.debug.activeDebugSession;
+      if (!ses || ses.type !== type) {
+        vscode.window.showInformationMessage('Start a Lua-CSharp debug session to configure debugger options.');
+        return;
+      }
+      try {
+        const res: any = await ses.customRequest('getOptions');
+        const current = String(res?.stepOverMode ?? 'Line');
+        const items: vscode.QuickPickItem[] = [
+          { label: current === 'Line' ? '$(check) Line' : '    Line', description: 'Step over per source line' },
+          { label: current === 'Instruction' ? '$(check) Instruction' : '    Instruction', description: 'Step over per bytecode instruction' },
+        ];
+        const pick = await vscode.window.showQuickPick(items, { placeHolder: 'Step Over Granularity' });
+        if (!pick) return;
+        const mode = pick.label.includes('Instruction') ? 'Instruction' : 'Line';
+        await ses.customRequest('setStepOverMode', { mode });
+        vscode.window.showInformationMessage(`Step Over granularity set to ${mode}.`);
+      } catch (e: any) {
+        vscode.window.showErrorMessage(`Failed to update debugger options: ${e?.message ?? e}`);
+      }
+    })
+  );
+
   // CodeLens: Offer clickable action above Lua function definitions
   const selector: vscode.DocumentSelector = [
     { language: 'lua', scheme: 'file' },

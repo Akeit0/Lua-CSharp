@@ -68,6 +68,13 @@ If you see an esbuild platform mismatch (e.g. Windows node_modules on WSL), remo
 
 - A status bar button “Bytecode” triggers the same toggle behavior as the command.
 
+### Debugger Options
+
+- Command Palette → “Lua: Debugger Options” opens a picker for Step Over granularity:
+  - Line: step over per source line
+  - Instruction: step over per bytecode instruction
+  Requires an active Lua‑CSharp debug session.
+
 ## Settings
 
 - `luaCsharp.bytecodeViewer.openOnStop` (boolean, default `false`)
@@ -76,6 +83,7 @@ If you see an esbuild platform mismatch (e.g. Windows node_modules on WSL), remo
 ## Commands
 
 - `Lua: Bytecode Viewer` (`lua-csharp.showBytecode`): toggle the viewer. With an active debug session it toggles the live viewer; without a session it toggles a placeholder.
+- `Lua: Debugger Options` (`lua-csharp.debugOptions`): configure Step Over granularity.
 
 ## Notes & Limitations
 
