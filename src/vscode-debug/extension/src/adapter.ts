@@ -31,7 +31,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   };
   private launched = false;
   private lastStopped?: { file?: string; line?: number };
-  private pending = new Map<string, { resolve: (v: any) => void; reject: (e: any) => void }>();
+  private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
   private nextVarRef = 1;
   private localsRef = 0;
   private globalsRef = 0;
@@ -316,16 +316,16 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             break;
         }
       } else if (msg.type === 'response' && msg.id) {
-        const handler = this.pending.get(String(msg.id));
+        const handler = this.pending.get(Number(msg.id));
         if (handler) {
-          this.pending.delete(String(msg.id));
+          this.pending.delete(Number(msg.id));
           if (msg.error) handler.reject(msg.error);
           else handler.resolve(msg.result);
         }
       }
     } catch (e) {
       this.sendEvent(
-        new OutputEvent(`[lua-csharp] host message parse error: ${e}\n`)
+        new OutputEvent(`[lua-csharp] host message parse error: ${e} ${line}\n`)
       );
     }
   }
@@ -406,7 +406,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   }
 
   private rpcSend(payload: { method: string; params?: any }) {
-    const id = String(this.nextId++);
+    const id = (this.nextId++);
     const msg = JSON.stringify({ id, method: payload.method, params: payload.params ?? {} }) + '\n';
     if (this.proc) this.proc.stdin.write(msg);
     else if (this.socket) this.socket.write(msg);
@@ -414,7 +414,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
 
   private rpcCall(method: string, params?: any): Promise<any> {
     if (!this.proc && !this.socket) return Promise.reject(new Error('no transport'));
-    const id = String(this.nextId++);
+    const id = (this.nextId++);
     const promise = new Promise<any>((resolve, reject) => {
       this.pending.set(id, { resolve, reject });
     });

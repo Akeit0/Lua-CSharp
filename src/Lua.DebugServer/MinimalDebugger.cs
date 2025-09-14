@@ -17,7 +17,7 @@ class MinimalDebugger : IDebugger
     readonly Dictionary<string, List<int>> pending = new();
     readonly Dictionary<string, Prototype> protos = new();
     readonly Dictionary<string, HashSet<int>> instrPending = new(StringComparer.Ordinal);
-    
+
     // Expose search by file/line across registered prototypes
     public (Prototype? proto, int pc) FindPrototypeBySource(string file, int line)
     {
@@ -37,6 +37,7 @@ class MinimalDebugger : IDebugger
                     candidates.Add(kv.Value);
                 }
             }
+
             // If none, fallback to filename match
             if (candidates.Count == 0)
             {
@@ -74,20 +75,24 @@ class MinimalDebugger : IDebugger
         int pc = -1;
         for (int i = 0; i < proto.LineInfo.Length; i++)
         {
-            if (proto.LineInfo[i] == line) { pc = i; break; }
+            if (proto.LineInfo[i] == line)
+            {
+                pc = i;
+                break;
+            }
         }
 
         return pc >= 0 ? (proto, pc) : (null, -1);
     }
+
     KeyValuePair<(Prototype proto, int index), Instruction>? stepBreak;
     LuaState? lastThread;
     int pushCount = 0;
     readonly object sync = new();
 
 
-
     StepMode stepMode = StepMode.None;
-    
+
     StepOverMode stepOverMode = StepOverMode.Line;
 
     public void RegisterPrototype(Prototype proto)
@@ -463,7 +468,7 @@ class MinimalDebugger : IDebugger
             stepOverMode = mode;
         }
     }
-    
+
     public StepOverMode GetStepOverMode()
     {
         lock (sync)
@@ -517,18 +522,10 @@ class MinimalDebugger : IDebugger
         }
 
         var currentLine = proto.LineInfo[pc];
+
         for (int i = nextPc; i < proto.LineInfo.Length; i++)
         {
-            if (stepIn)
-            {
-                var instruction = GetOriginalInstruction(proto, i);
-                if (instruction.OpCode is OpCode.Call or OpCode.TailCall)
-                {
-                    return false;
-                }
-            }
-
-            if (stepOverMode ==StepOverMode.Instruction||proto.LineInfo[i] != currentLine)
+            if (stepOverMode == StepOverMode.Instruction || proto.LineInfo[i] != currentLine)
             {
                 var key = (proto, i);
                 lock (sync)
@@ -547,6 +544,15 @@ class MinimalDebugger : IDebugger
                 }
 
                 return true;
+            }
+
+            if (stepIn)
+            {
+                var instruction = GetOriginalInstruction(proto, i);
+                if (instruction.OpCode is OpCode.Call or OpCode.TailCall)
+                {
+                    return false;
+                }
             }
         }
 
@@ -597,7 +603,7 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public void OnPopCallStackFrame(LuaState thread , ref CallStackFrame poppedFrame)
+    public void OnPopCallStackFrame(LuaState thread, ref CallStackFrame poppedFrame)
     {
         //RpcServer.WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame (stepMode={stepMode})");
 
@@ -610,6 +616,7 @@ class MinimalDebugger : IDebugger
                 stepMode = StepMode.None;
                 return;
             }
+
             // After pop, current frame is caller; arm a step at the next different line after the call site
             var f = poppedFrame;
             var caller = thread.GetCurrentFrame();
@@ -620,7 +627,7 @@ class MinimalDebugger : IDebugger
                 LuaDebugSession.Current?.UpdateStoppedContext(thread, callPc, clo);
                 var file = p.ChunkName.TrimStart('@');
                 var line = p.LineInfo[callPc];
-                RpcServer.WriteLogToConsole ($"[Lua.DebugServer] Step-Out to {file}:{line} (instruction {callPc})");
+                RpcServer.WriteLogToConsole($"[Lua.DebugServer] Step-Out to {file}:{line} (instruction {callPc})");
                 LuaDebugSession.PauseForBreakpoint(file, line);
             }
             else
@@ -917,6 +924,7 @@ class MinimalDebugger : IDebugger
 }
 
 enum StepMode { None, Over, In, Out }
+
 public enum StepOverMode
 {
     Line, Instruction

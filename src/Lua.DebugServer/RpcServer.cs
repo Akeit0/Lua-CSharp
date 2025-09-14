@@ -1,18 +1,35 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Cysharp.IO;
+using System.Diagnostics.CodeAnalysis;
+using System.Text.Unicode;
 
 static class RpcServer
 {
     static readonly JsonSerializerOptions options = new() { PropertyNamingPolicy = JsonNamingPolicy.CamelCase, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull, WriteIndented = false };
 
     static readonly object writeLock = new();
-    static TextReader input = Console.In;
-    static TextWriter output = Console.Out;
+    static Stream? inputStream;
 
-    public static void UseIO(TextReader reader, TextWriter writer)
+    [field: AllowNull, MaybeNull]
+    static Utf8StreamReader Input
     {
-        input = reader;
-        output = writer;
+        get
+        {
+            field ??= new Utf8StreamReader(inputStream ?? Console.OpenStandardInput());
+            return field;
+        }
+    }
+
+    static Stream output = Console.OpenStandardOutput();
+
+    public static void UseIO(Stream reader, Stream writer)
+    {
+        inputStream = reader;
+        lock (writeLock)
+        {
+            output = writer;
+        }
     }
 
     public static async Task RunAsync()
@@ -20,28 +37,24 @@ static class RpcServer
         // Send an initial output event so the client knows we're alive
         WriteLogToConsole("[Lua.DebugServer] ready");
 
-        string? line;
-        while ((line = await input.ReadLineAsync()) is not null)
+        ReadOnlyMemory<byte>? line;
+        while ((line = await Input.ReadLineAsync()) is not null)
         {
-            if (string.IsNullOrWhiteSpace(line)) continue;
+            if (line.Value.IsEmpty) continue;
             try
             {
-                var doc = JsonDocument.Parse(line);
+                using var doc = JsonDocument.Parse(line.Value);
                 var root = doc.RootElement;
-                var id = root.TryGetProperty("id", out var idEl) ? idEl.GetString() : null;
-                var method = root.GetProperty("method").GetString();
-                var @params = root.TryGetProperty("params", out var p) ? p : default;
+                var id = root.GetProperty("id"u8).GetInt32();
+                var method = root.GetProperty("method"u8).GetString();
+                var @params = root.TryGetProperty("params"u8, out var p) ? p : default;
 
                 switch (method)
                 {
-                    case "ping":
-                        WriteResponse(id, new { message = "pong" });
-                        break;
                     case "initialize":
                         LuaDebugSession.Current ??= new();
-
-                        WriteEvent("initialized", new { });
-                        WriteResponse(id, new { capabilities = new { } });
+                        WriteEvent("initialized"u8);
+                        WriteResponse(id);
                         break;
                     case "setBreakpoints":
                         HandleSetBreakpoints(id, @params);
@@ -98,50 +111,157 @@ static class RpcServer
                         HandleSetStepOverMode(id, @params);
                         break;
                     case "terminate":
-                        WriteResponse(id, new { });
+                        WriteResponse(id);
                         return;
                     default:
-                        WriteResponse(id, error: new { message = $"Unknown method: {method}" });
+                        WriteError(id, $"Unknown method: {method}");
                         break;
                 }
             }
             catch (Exception ex)
             {
-                WriteEvent("output", new { category = "stderr", output = ex + "\n" });
+                WriteEvent("output"u8, new { category = "stderr", output = ex + "\n" });
             }
         }
     }
 
     public static void Publish(string ev, object body) => WriteEvent(ev, body);
+    public static void Publish(ReadOnlySpan<byte> ev, object? body = null) => WriteEvent(ev, body);
 
-    static void WriteResponse(string? id, object? result = null, object? error = null)
+    static void WriteResponse(int id, ReadOnlySpan<byte> key, object value)
     {
-        var payload = new { type = "response", id, result, error };
-        Write(payload);
+        lock (writeLock)
+        {
+            output.Write("{\"type\":\"response\",\"id\":\""u8);
+            var span = (stackalloc byte[11]);
+            id.TryFormat(span, out var written);
+            output.Write(span[..written]);
+            output.WriteByte((byte)'"');
+            {
+                output.Write(",\"result\":{\""u8);
+                output.Write(key);
+                output.WriteByte((byte)'\"');
+                output.WriteByte((byte)':');
+                JsonSerializer.Serialize(output, value, options);
+                output.WriteByte((byte)'}');
+            }
+
+            output.WriteByte((byte)'}');
+            output.WriteByte((byte)'\n');
+            output.Flush();
+        }
+        //var payload = new { type = "response", id, result, error };
+        // Write(payload);
     }
 
-    static void WriteEvent(string ev, object body)
+    static void WriteError(int id, string message)
+    {
+        lock (writeLock)
+        {
+            output.Write("{\"type\":\"response\",\"id\":\""u8);
+            var span = (stackalloc byte[11]);
+            id.TryFormat(span, out var written);
+            output.Write(span[..written]);
+            output.WriteByte((byte)'"');
+            {
+                output.Write(",\"error\":{\"message\":"u8);
+                JsonSerializer.Serialize(output, message, options);
+                output.WriteByte((byte)'}');
+            }
+
+            output.WriteByte((byte)'}');
+            output.WriteByte((byte)'\n');
+            output.Flush();
+        }
+        //var payload = new { type = "response", id, result, error };
+        // Write(payload);
+    }
+
+    static void WriteResponse(int id)
+    {
+        lock (writeLock)
+        {
+            output.Write("{\"type\":\"response\",\"id\":\""u8);
+            var span = (stackalloc byte[11]);
+            id.TryFormat(span, out var written);
+            output.Write(span[..written]);
+            output.WriteByte((byte)'"');
+
+            output.WriteByte((byte)'}');
+            output.WriteByte((byte)'\n');
+            output.Flush();
+        }
+        //var payload = new { type = "response", id, result, error };
+        // Write(payload);
+    }
+
+    static void WriteResponse(int id, object result)
+    {
+        lock (writeLock)
+        {
+            output.Write("{\"type\":\"response\",\"id\":\""u8);
+            var span = (stackalloc byte[11]);
+            id.TryFormat(span, out var written);
+            output.Write(span[..written]);
+            output.WriteByte((byte)'"');
+
+
+            output.Write(",\"result\":"u8);
+            JsonSerializer.Serialize(output, result, options);
+
+
+            output.WriteByte((byte)'}');
+            output.WriteByte((byte)'\n');
+            output.Flush();
+        }
+        //var payload = new { type = "response", id, result, error };
+        // Write(payload);
+    }
+
+    static void WriteEvent(string ev, object? body = null)
     {
         var payload = new { type = "event", @event = ev, body };
         Write(payload);
     }
 
+    static void WriteEvent(ReadOnlySpan<byte> ev, object? body = null)
+    {
+        lock (writeLock)
+        {
+            output.Write("{\"type\":\"event\",\"event\":\""u8);
+            output.Write(ev);
+            output.WriteByte((byte)'"');
+
+            if (body is not null)
+            {
+                output.Write(",\"body\":"u8);
+                JsonSerializer.Serialize(output, body, options);
+            }
+
+            output.WriteByte((byte)'}');
+            output.WriteByte((byte)'\n');
+            output.Flush();
+        }
+        //var  payload = new { type = "event", @event =  System.Text.Encoding.UTF8.GetString(ev) , body };
+        //Write( payload);
+    }
+
     public static void WriteToConsole(string text, string category = "console")
     {
-        WriteEvent("output", new { category = category, output = text + "\n" });
+        WriteEvent("output"u8, new { category = category, output = text + "\n" });
     }
 
     public static void WriteLogToConsole(string text)
     {
-        WriteEvent("output", new { category = "important", output = text + "\n" });
+        WriteEvent("output"u8, new { category = "important", output = text + "\n" });
     }
 
     static void Write(object payload)
     {
-        var json = JsonSerializer.Serialize(payload, options);
         lock (writeLock)
         {
-            output.WriteLine(json);
+            JsonSerializer.Serialize(output, payload, options);
+            output.WriteByte((byte)'\n');
             output.Flush();
         }
     }
@@ -156,10 +276,8 @@ static class RpcServer
         {
             using var client = await listener.AcceptTcpClientAsync(cancellationToken);
 
-            using var stream = client.GetStream();
-            using var reader = new StreamReader(stream);
-            using var writer = new StreamWriter(stream) { AutoFlush = true, NewLine = "\n" };
-            UseIO(reader, writer);
+            await using var stream = client.GetStream();
+            UseIO(stream, stream);
 
             await RunAsync();
         }
@@ -170,7 +288,7 @@ static class RpcServer
     }
 
     // Handlers
-    static void HandleSetBreakpoints(string? id, JsonElement @params)
+    static void HandleSetBreakpoints(int id, JsonElement @params)
     {
         var source = @params.GetProperty("source").GetString() ?? string.Empty;
         var list = new List<(int line, string? condition, string? hitCondition, string? logMessage)>();
@@ -201,10 +319,10 @@ static class RpcServer
         LuaDebugSession.Current ??= new LuaDebugSession();
 
         LuaDebugSession.Current.SetBreakpoints(source, list);
-        WriteResponse(id, new { breakpoints = list.Select(l => new { verified = true, line = l.line }).ToArray() });
+        WriteResponse(id, "breakpoints"u8, list.Select(l => new { verified = true, line = l.line }).ToArray());
     }
 
-    static async Task HandleLaunchAsync(string? id, JsonElement @params)
+    static async Task HandleLaunchAsync(int id, JsonElement @params)
     {
         var program = @params.GetProperty("program").GetString() ?? string.Empty;
         var cwd = @params.TryGetProperty("cwd", out var cEl) ? cEl.GetString() : null;
@@ -213,114 +331,114 @@ static class RpcServer
         LuaDebugSession.Current ??= new LuaDebugSession();
 
         await LuaDebugSession.Current.LaunchAsync(program, cwd, stopOnEntry);
-        WriteResponse(id, new { });
+        WriteResponse(id);
     }
 
-    static void HandleContinue(string? id)
+    static void HandleContinue(int id)
     {
         LuaDebugSession.Current?.Continue(true);
-        WriteResponse(id, new { allThreadsContinued = true });
+        WriteResponse(id, "allThreadsContinued"u8, true);
     }
 
-    static void HandleGetLocals(string? id, JsonElement @params)
+    static void HandleGetLocals(int id, JsonElement @params)
     {
         object[] locals;
         if (@params.ValueKind != JsonValueKind.Undefined && @params.TryGetProperty("frameId", out var fEl) && fEl.TryGetInt32(out var fid))
             locals = LuaDebugSession.Current?.GetLocalsForFrame(fid) ?? Array.Empty<object>();
         else
             locals = LuaDebugSession.Current?.GetLocals() ?? Array.Empty<object>();
-        WriteResponse(id, new { variables = locals });
+        WriteResponse (id, "variables"u8, locals);
     }
 
-    static void HandleNext(string? id)
+    static void HandleNext(int id)
     {
         var session = LuaDebugSession.Current;
         if (session is null) return;
         session.StepNext();
         session.Continue();
-        WriteResponse(id, new { });
+        WriteResponse(id);
     }
 
-    static void HandleStepIn(string? id)
+    static void HandleStepIn(int id)
     {
         var session = LuaDebugSession.Current;
         if (session is null) return;
         session.StepIn();
         session.Continue();
-        WriteResponse(id, new { });
+        WriteResponse(id);
     }
 
-    static void HandleStepOut(string? id)
+    static void HandleStepOut(int id)
     {
         var session = LuaDebugSession.Current;
         if (session is null) return;
         session.StepOut();
         session.Continue();
-        WriteResponse(id, new { });
+        WriteResponse(id);
     }
 
-    static void HandleGetGlobals(string? id)
+    static void HandleGetGlobals(int id)
     {
         var globals = LuaDebugSession.Current?.GetGlobals() ?? Array.Empty<object>();
-        WriteResponse(id, new { variables = globals });
+        WriteResponse (id ,"variables"u8, globals);
     }
 
-    static void HandleGetOptions(string? id)
+    static void HandleGetOptions(int id)
     {
         var mode = MinimalDebugger.Active?.GetStepOverMode().ToString() ?? "Line";
-        WriteResponse(id, new { stepOverMode = mode });
+        WriteResponse(id, "stepOverMode"u8, mode.ToString());
     }
 
-    static void HandleSetStepOverMode(string? id, JsonElement @params)
+    static void HandleSetStepOverMode(int id, JsonElement @params)
     {
         var text = @params.TryGetProperty("mode", out var m) && m.ValueKind == JsonValueKind.String ? (m.GetString() ?? "Line") : "Line";
         StepOverMode mode;
         if (!Enum.TryParse<StepOverMode>(text, ignoreCase: true, out mode)) mode = StepOverMode.Line;
         MinimalDebugger.Active?.SetStepOverMode(mode);
-        WriteResponse(id, new { stepOverMode = mode.ToString() });
+        WriteResponse(id, "stepOverMode"u8, mode.ToString());
     }
 
-    static void HandleGetUpvalues(string? id, JsonElement @params)
+    static void HandleGetUpvalues(int id, JsonElement @params)
     {
         object[] upvalues;
         if (@params.ValueKind != JsonValueKind.Undefined && @params.TryGetProperty("frameId", out var fEl) && fEl.TryGetInt32(out var fid))
             upvalues = LuaDebugSession.Current?.GetUpvaluesForFrame(fid) ?? Array.Empty<object>();
         else
             upvalues = LuaDebugSession.Current?.GetUpvalues() ?? Array.Empty<object>();
-        WriteResponse(id, new { variables = upvalues });
+        WriteResponse(id, "variables"u8, upvalues);
     }
 
-    static void HandleSetLocal(string? id, JsonElement @params)
+    static void HandleSetLocal(int id, JsonElement @params)
     {
         var name = @params.GetProperty("name").GetString() ?? string.Empty;
         var value = @params.GetProperty("value").GetString() ?? string.Empty;
         var res = LuaDebugSession.Current?.SetLocal(name, value) ?? (false, null);
         if (!res.ok || res.value is null)
         {
-            WriteResponse(id, error: new { message = $"failed to set local '{name}'" });
+            WriteError(id, $"failed to set local '{name}'");
         }
         else
         {
-            WriteResponse(id, new { value = res.value });
+            WriteResponse(id, "value"u8, res.value);
         }
     }
 
-    static void HandleSetUpvalue(string? id, JsonElement @params)
+    static void HandleSetUpvalue(int id, JsonElement @params)
     {
         var name = @params.GetProperty("name").GetString() ?? string.Empty;
         var value = @params.GetProperty("value").GetString() ?? string.Empty;
-        var res = LuaDebugSession.Current?.SetUpvalue(name, value) ?? (false, null);
-        if (!res.ok || res.value is null)
+        var res = LuaDebugSession.Current?.SetUpvalue(name, value);
+        if (res is null)
         {
-            WriteResponse(id, error: new { message = $"failed to set upvalue '{name}'" });
+            WriteError(id, $"failed to set upvalue '{name}'");
         }
         else
         {
-            WriteResponse(id, new { value = res.value });
+            WriteResponse(id, "value"u8, res);
         }
     }
 
-    static void HandleGetBytecode(string? id, JsonElement @params)
+    static void HandleGetBytecode(int id, JsonElement @params)
     {
         object? result;
         if (@params.ValueKind != JsonValueKind.Undefined && @params.TryGetProperty("frameId", out var fEl) && fEl.TryGetInt32(out var fid))
@@ -329,46 +447,46 @@ static class RpcServer
             result = LuaDebugSession.Current?.GetBytecodeSnapshot();
         if (result is null)
         {
-            WriteResponse(id, error: new { message = "no paused location" });
+            WriteError(id, "no paused location");
             return;
         }
 
         WriteResponse(id, result);
     }
 
-    static void HandleGetStack(string? id)
+    static void HandleGetStack(int id)
     {
         var frames = LuaDebugSession.Current?.GetCallStack() ?? Array.Empty<object>();
-        WriteResponse(id, new { frames });
+        WriteResponse(id, "frames"u8, frames);
     }
 
-    static void HandleGetInstrBreakpoints(string? id, JsonElement @params)
+    static void HandleGetInstrBreakpoints(int id, JsonElement @params)
     {
         var chunk = @params.GetProperty("chunk").GetString() ?? string.Empty;
         var bps = LuaDebugSession.Current?.GetInstructionBreakpoints(chunk) ?? Array.Empty<int>();
-        WriteResponse(id, new { breakpoints = bps });
+        WriteResponse(id, "breakpoints"u8, bps);
     }
 
-    static void HandleSetInstrBreakpoint(string? id, JsonElement @params)
+    static void HandleSetInstrBreakpoint(int id, JsonElement @params)
     {
         var chunk = @params.GetProperty("chunk").GetString() ?? string.Empty;
         var index = @params.GetProperty("index").GetInt32();
         var enabled = @params.TryGetProperty("enabled", out var e) && e.GetBoolean();
         LuaDebugSession.Current?.SetInstructionBreakpoint(chunk, index, enabled);
-        WriteResponse(id, new { });
+        WriteResponse(id);
     }
 
-    static void HandleFindPrototype(string? id, JsonElement @params)
+    static void HandleFindPrototype(int id, JsonElement @params)
     {
         if (!@params.TryGetProperty("file", out var f) || f.ValueKind != JsonValueKind.String)
         {
-            WriteResponse(id, error: new { message = "missing file" });
+            WriteError(id, "missing file");
             return;
         }
 
         if (!@params.TryGetProperty("line", out var l) || !l.TryGetInt32(out var line))
         {
-            WriteResponse(id, error: new { message = "missing line" });
+            WriteError(id, "missing line");
             return;
         }
 
@@ -376,7 +494,7 @@ static class RpcServer
         var result = LuaDebugSession.Current?.FindPrototypeBytecode(file, line);
         if (result is null)
         {
-            WriteResponse(id, error: new { message = "not found" });
+            WriteError(id, "not found");
             return;
         }
 

@@ -12,5 +12,9 @@
     <ProjectReference Include="../Lua/Lua.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <PackageReference Include="Utf8StreamReader" Version="1.3.2" />
+  </ItemGroup>
+
 </Project>
 

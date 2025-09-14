@@ -49,6 +49,11 @@ class SimpleDebugger : IDebugger
     {
     }
 
+    public void OnPopCallStackFrame(LuaState thread, ref CallStackFrame poppedFrame)
+    {
+        throw new NotImplementedException();
+    }
+
     public void OnPopCallStackFrame(LuaState thread)
     {
     }

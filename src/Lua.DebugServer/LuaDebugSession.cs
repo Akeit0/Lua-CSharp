@@ -115,13 +115,13 @@ sealed class LuaDebugSession
             try
             {
                 await state.ExecuteAsync(p);
-                RpcServer.Publish("terminated", new { });
+                RpcServer.Publish("terminated"u8);
             }
             catch (Exception ex)
             {
-                RpcServer.Publish("output", new { category = "stderr", output = (ex.InnerException?.StackTrace ?? "") + "\n" });
-                RpcServer.Publish("output", new { category = "stderr", output = ex + "\n" });
-                RpcServer.Publish("terminated", new { });
+                RpcServer.Publish("output"u8, new { category = "stderr", output = (ex.InnerException?.StackTrace ?? "") + "\n" });
+                RpcServer.Publish("output"u8, new { category = "stderr", output = ex + "\n" });
+                RpcServer.Publish("terminated"u8);
             }
         });
     }
@@ -400,14 +400,14 @@ sealed class LuaDebugSession
         }
     }
 
-    public (bool ok, string? value) SetUpvalue(string name, string valueText)
+    public string?  SetUpvalue(string name, string valueText)
     {
         lock (locals)
         {
-            if (state is null) return (false, null);
+            if (state is null) return null;
             var thread = state;
             var f = thread.GetCurrentFrame();
-            if (f.Function is not LuaClosure clo) return (false, null);
+            if (f.Function is not LuaClosure clo) return null;
 
             var desc = clo.Proto.UpValues;
             var values = clo.UpValues;
@@ -422,19 +422,19 @@ sealed class LuaDebugSession
                 n = n.Trim();
                 if (string.Equals(n, name, StringComparison.Ordinal))
                 {
-                    if (!TryParseLuaValue(valueText, out var v)) return (false, null);
+                    if (!TryParseLuaValue(valueText, out var v)) return null;
                     try { values[i].SetValue(v); }
-                    catch { return (false, null); }
+                    catch { return null; }
 
                     string s;
                     try { s = values[i].GetValue().ToString(); }
                     catch { s = valueText; }
 
-                    return (true, s);
+                    return s;
                 }
             }
 
-            return (false, null);
+            return null;
         }
     }
 
@@ -673,7 +673,7 @@ sealed class LuaDebugSession
                     instruction = original;
                 }
             }
-            string text; try { text = instruction.ToString(); } catch { text = instruction.Value.ToString(); }
+            string text; try { text = DebugUtility.GetInstructionString(proto,i,instruction); } catch(Exception e) { text = e.Message; }
             if (instruction.OpCode == OpCode.Closure)
             {
                 int childIndex = instruction.Bx;
