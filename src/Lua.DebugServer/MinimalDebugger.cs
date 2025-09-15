@@ -9,16 +9,11 @@ class MinimalDebugger : IDebugger
 
     [field:AllowNull]
     public Func<Task, ValueTask> OnContinue {
-        get
-        {
-            return field ??= async (t) =>
+        get =>
+            field ??= async (t) =>
             {
-                t.Wait();
-                await Task.Delay(1);
-                return ;
+                await t;
             };
-            
-        }
         set => field = value;
     }
 

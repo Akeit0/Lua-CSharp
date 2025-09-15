@@ -92,10 +92,20 @@ sealed class LuaDebugSession
             return null;
         }
     }
-    
-    
 
-    public async Task LaunchAsync(string program, string? cwd, bool stopOnEntry)
+
+    public MinimalDebugger PreLaunch(LuaState state)
+    {
+         debugger ??= new MinimalDebugger();
+        state.Debugger = debugger;
+        this.state = state;
+        return debugger;
+        // if (stopOnEntry)
+        // {
+        //     await PauseAndWait("entry", program, 1);
+        // }
+    }
+    public void Launch(string program, string? cwd, bool stopOnEntry)
     {
         if (!string.IsNullOrEmpty(cwd)) Directory.SetCurrentDirectory(cwd);
         // Reuse existing debugger so pre-launch breakpoints persist
@@ -111,11 +121,12 @@ sealed class LuaDebugSession
         //     await PauseAndWait("entry", program, 1);
         // }
 
-        var p = await state.LoadFileAsync(program, "bt", null, default);
+       
         _ = Task.Run(async () =>
         {
             try
             {
+                var p = await state.LoadFileAsync(program, "bt", null, default);
                 await state.ExecuteAsync(p);
                 RpcServer.Publish("terminated"u8);
             }

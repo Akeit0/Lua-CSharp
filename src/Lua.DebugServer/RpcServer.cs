@@ -1,8 +1,10 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Cysharp.IO;
+using Lua;
+using Lua.DebugServer;
+using Lua.Standard;
 using System.Diagnostics.CodeAnalysis;
-using System.Text.Unicode;
 
 static class RpcServer
 {
@@ -32,10 +34,11 @@ static class RpcServer
         }
     }
 
-    public static async Task RunAsync()
+
+    public static async Task RunAsync(bool returnOnLaunch = false)
     {
         // Send an initial output event so the client knows we're alive
-        WriteLogToConsole("[Lua.DebugServer] ready");
+        //WriteLogToConsole("[Lua.DebugServer] ready");
 
         ReadOnlyMemory<byte>? line;
         while ((line = await Input.ReadLineAsync()) is not null)
@@ -60,7 +63,13 @@ static class RpcServer
                         HandleSetBreakpoints(id, @params);
                         break;
                     case "launch":
-                        await HandleLaunchAsync(id, @params);
+                        if (returnOnLaunch)
+                        {
+                            WriteResponse(id);
+                            return;
+                        }
+
+                        HandleLaunch(id, @params);
                         break;
                     case "continue":
                         HandleContinue(id);
@@ -266,6 +275,7 @@ static class RpcServer
         }
     }
 
+
     public static async Task RunTcpAsync(string program, string host, int port, CancellationToken cancellationToken = default)
     {
         var ip = System.Net.IPAddress.TryParse(host, out var parsed) ? parsed : System.Net.IPAddress.Any;
@@ -279,7 +289,53 @@ static class RpcServer
             await using var stream = client.GetStream();
             UseIO(stream, stream);
 
-            await RunAsync();
+            await RunAsync(true);
+            var state = LuaState.Create();
+            // Reuse existing debugger so pre-launch breakpoints persist
+
+            state.OpenStandardLibraries();
+            LuaDebugSession.Current ??= new LuaDebugSession();
+            var debugger = LuaDebugSession.Current.PreLaunch(state);
+
+            var engine = new SimpleEngine();
+            debugger.OnContinue = async t =>
+            {
+                await t;
+                var taskCompletion = new TaskCompletionSource();
+                engine.Enqueue(() => taskCompletion.SetResult());
+                await taskCompletion.Task;
+            };
+
+
+            engine.Enqueue(async () =>
+            {
+                try
+                {
+                    var p = await state.LoadFileAsync(program, "bt", null, cancellationToken);
+                    await state.ExecuteAsync(p, cancellationToken);
+                    RpcServer.Publish("terminated"u8);
+                }
+                catch (Exception ex)
+                {
+                    RpcServer.Publish("output"u8, new { category = "stderr", output = (ex.InnerException?.StackTrace ?? "") + "\n" });
+                    RpcServer.Publish("output"u8, new { category = "stderr", output = ex + "\n" });
+                    RpcServer.Publish("terminated"u8);
+                }
+            });
+
+            engine.Enqueue(async () =>
+            {
+                try
+                {
+                    await RunAsync();
+                }
+                catch (Exception ex)
+                {
+                    RpcServer.Publish("output"u8, new { category = "stderr", output = (ex.InnerException?.StackTrace ?? "") + "\n" });
+                    RpcServer.Publish("output"u8, new { category = "stderr", output = ex + "\n" });
+                }
+            });
+            engine.Update();
         }
         finally
         {
@@ -322,7 +378,7 @@ static class RpcServer
         WriteResponse(id, "breakpoints"u8, list.Select(l => new { verified = true, line = l.line }).ToArray());
     }
 
-    static async Task HandleLaunchAsync(int id, JsonElement @params)
+    static void HandleLaunch(int id, JsonElement @params)
     {
         var program = @params.GetProperty("program").GetString() ?? string.Empty;
         var cwd = @params.TryGetProperty("cwd", out var cEl) ? cEl.GetString() : null;
@@ -330,7 +386,7 @@ static class RpcServer
 
         LuaDebugSession.Current ??= new LuaDebugSession();
 
-        await LuaDebugSession.Current.LaunchAsync(program, cwd, stopOnEntry);
+        LuaDebugSession.Current.Launch(program, cwd, stopOnEntry);
         WriteResponse(id);
     }
 
