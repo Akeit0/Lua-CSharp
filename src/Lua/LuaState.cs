@@ -154,6 +154,7 @@ public class LuaState : IDisposable
     readonly CoroutineCore? coroutine;
     internal bool IsLineHookEnabled;
     internal BitFlags2 CallOrReturnHookMask;
+    
     internal bool IsInHook;
     internal long HookCount;
     internal int BaseHookCount;
@@ -167,6 +168,8 @@ public class LuaState : IDisposable
     public bool IsRunning => CallStackFrameCount != 0;
     public bool IsCoroutine => coroutine != null;
     internal LuaFunction? Hook { get; set; }
+
+    internal bool ShouldHookCall => CallOrReturnHookMask.Value != 0 || GlobalState.DebuggerStepMode >= StepMode.In;
 
     public LuaFunction? CoroutineFunction => coroutine?.Function;
 
@@ -276,8 +279,8 @@ public class LuaState : IDisposable
         CurrentException = null;
         ref var callStack = ref coreData!.CallStack;
         callStack.Push(frame);
-        Debugger?.OnPushCallStackFrame(this);
     }
+    
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrameWithStackPop()
@@ -315,12 +318,12 @@ public class LuaState : IDisposable
         var coreData = this.coreData!;
         ref var callStack = ref coreData.CallStack;
         var popFrame = callStack.Pop();
-        Debugger?.OnPopCallStackFrame(this, ref popFrame);
         if (CurrentException != null)
         {
             ExceptionTrace.Push(popFrame);
         }
     }
+    
 
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     internal void PopCallStackFrameUntil(int top)
@@ -423,7 +426,7 @@ public class LuaState : IDisposable
         var callStackTop = state.CallStackFrameCount;
         try
         {
-            if (CallOrReturnHookMask.Value != 0 && !IsInHook)
+            if (state.ShouldHookCall && !IsInHook)
             {
                 return await LuaVirtualMachine.ExecuteCallHook(context, cancellationToken);
             }

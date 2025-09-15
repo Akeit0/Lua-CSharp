@@ -3,6 +3,14 @@ using Lua.Runtime;
 
 namespace Lua.Debugging;
 
+public enum StepMode
+{
+    None,
+    Over,
+    In,
+    Out
+}
+
 public static class DebugUtility
 {
     public static readonly Instruction DebugBreakInstruction = new() { OpCode = (OpCode)40 };
@@ -25,6 +33,12 @@ public static class DebugUtility
     public static string? GetLocalVariableName(Prototype proto, int registerIndex, int instructionIndex)
     {
         return LuaDebug.GetLocalName(proto, registerIndex, instructionIndex);
+    }
+
+    public static void SetStepMode(LuaState? thread, StepMode mode)
+    {
+        if (thread is null) return;
+        thread.GlobalState.DebuggerStepMode = mode;
     }
 
     public static string GetInstructionString(Prototype proto, int instructionIndex, Instruction instruction)

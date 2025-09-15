@@ -1,3 +1,4 @@
+using Lua.Debugging;
 using System.Diagnostics.CodeAnalysis;
 using System.Runtime.CompilerServices;
 using Lua.Internal;
@@ -215,7 +216,7 @@ public static partial class LuaVirtualMachine
             State.PopCallStackFrameUntil(BaseCallStackCount);
         }
 
-        bool ExecutePostOperation(PostOperationType postOperation)
+        bool ExecutePostOperation(PostOperationType postOperation, int r)
         {
             var stackCount = Stack.Count;
             var resultsSpan = Stack.GetBuffer()[CurrentReturnFrameBase..];
@@ -247,6 +248,9 @@ public static partial class LuaVirtualMachine
                 case PostOperationType.Compare:
                     ComparePostOperation(this, resultsSpan);
                     break;
+                case PostOperationType.DebugResume:
+                    this.Instruction = Unsafe.As<int, Instruction>(ref r);
+                    break;
             }
 
             return true;
@@ -261,14 +265,18 @@ public static partial class LuaVirtualMachine
                 while (MoveNext(this))
                 {
                     toCatchFlag = true;
-                    await Task;
+                    var r = await Task;
                     Task = default;
-                    if (PostOperation is not (PostOperationType.TailCall or PostOperationType.DontPop))
+                    if (PostOperation is not (PostOperationType.TailCall or PostOperationType.DontPop or PostOperationType.DebugResume))
                     {
                         State.PopCallStackFrame();
+                        if (State.GlobalState.DebuggerStepMode == StepMode.Out && State.Debugger is not null)
+                        {
+                            await State.Debugger.OnPopCallStackFrame(State, Pc);
+                        }
                     }
 
-                    if (!ExecutePostOperation(PostOperation))
+                    if (!ExecutePostOperation(PostOperation, r))
                     {
                         break;
                     }
@@ -330,7 +338,8 @@ public static partial class LuaVirtualMachine
         TailCall,
         Self,
         Compare,
-        DontPop
+        DontPop,
+        DebugResume
     }
 
     internal static ValueTask<int> ExecuteClosureAsync(LuaState state, CancellationToken cancellationToken)
@@ -359,7 +368,7 @@ public static partial class LuaVirtualMachine
             ref var constHead = ref MemoryMarshalEx.UnsafeElementAt(context.Prototype.Constants, 0);
             ref var lineHookFlag = ref context.State.IsInHook ? ref DummyLineHookEnabled : ref context.State.IsLineHookEnabled;
             ref var hookCount = ref context.State.IsInHook ? ref DummyHookCount : ref context.State.HookCount;
-            goto Loop;
+            goto FirstLoop;
         LineHook:
 
             {
@@ -374,544 +383,605 @@ public static partial class LuaVirtualMachine
 
                 --context.Pc;
             }
-
-        Loop:
-            while (true)
+        FirstLoop: 
+            Instruction instruction;
+            if (context.PostOperation == PostOperationType.DebugResume)
             {
-                var instruction = Unsafe.Add(ref instructionsHead, ++context.Pc);
-                context.Instruction = instruction;
-                if (--hookCount == 0 || (lineHookFlag && context.Pc != context.LastHookPc))
-                {
-                    goto LineHook;
-                }
+                instruction = context.Instruction;
+                context.PostOperation = PostOperationType.Nop;
+                goto DebugResume;
+            }
+        Loop: 
+            instruction = Unsafe.Add(ref instructionsHead, ++context.Pc);
+            context.Instruction = instruction;
+            if (--hookCount == 0 || (lineHookFlag && context.Pc != context.LastHookPc))
+            {
+                goto LineHook;
+            }
 
-                context.LastHookPc = -1;
-            DebugResume:
-                var iA = instruction.A;
-                var opCode = instruction.OpCode;
-                switch (opCode)
-                {
-                    case OpCode.Move:
-                        Markers.Move();
-                        ref var stackHead = ref stack.FastGet(frameBase);
-                        Unsafe.Add(ref stackHead, iA) = Unsafe.Add(ref stackHead, instruction.B);
-                        stack.NotifyTop(iA + frameBase + 1);
-                        continue;
-                    case OpCode.LoadK:
-                        Markers.LoadK();
-                        stack.GetWithNotifyTop(iA + frameBase) = Unsafe.Add(ref constHead, instruction.Bx);
-                        continue;
-                    case OpCode.LoadKX:
-                        Markers.LoadKX();
-                        stack.GetWithNotifyTop(iA + frameBase) = Unsafe.Add(ref constHead, Unsafe.Add(ref instructionsHead, ++context.Pc).Ax);
-                        continue;
-                    case OpCode.LoadBool:
-                        Markers.LoadBool();
-                        stack.GetWithNotifyTop(iA + frameBase) = instruction.B != 0;
-                        if (instruction.C != 0)
-                        {
-                            context.Pc++;
-                        }
+            context.LastHookPc = -1;
+        DebugResume:
+            var iA = instruction.A;
+            var opCode = instruction.OpCode;
+            switch (opCode)
+            {
+                case OpCode.Move:
+                    Markers.Move();
+                    ref var stackHead = ref stack.FastGet(frameBase);
+                    Unsafe.Add(ref stackHead, iA) = Unsafe.Add(ref stackHead, instruction.B);
+                    stack.NotifyTop(iA + frameBase + 1);
+                    goto Loop;
+                case OpCode.LoadK:
+                    Markers.LoadK();
+                    stack.GetWithNotifyTop(iA + frameBase) = Unsafe.Add(ref constHead, instruction.Bx);
+                    goto Loop;
+                    ;
+                case OpCode.LoadKX:
+                    Markers.LoadKX();
+                    stack.GetWithNotifyTop(iA + frameBase) = Unsafe.Add(ref constHead, Unsafe.Add(ref instructionsHead, ++context.Pc).Ax);
+                    goto Loop;
+                    ;
+                case OpCode.LoadBool:
+                    Markers.LoadBool();
+                    stack.GetWithNotifyTop(iA + frameBase) = instruction.B != 0;
+                    if (instruction.C != 0)
+                    {
+                        context.Pc++;
+                    }
 
-                        continue;
-                    case OpCode.LoadNil:
-                        Markers.LoadNil();
-                        var ra1 = iA + frameBase + 1;
-                        var iB = instruction.B;
-                        stackHead = ref stack.FastGet(ra1 - 1);
-                        for (var i = 0; i <= iB; i++)
-                        {
-                            Unsafe.Add(ref stackHead, i) = default;
-                        }
+                    goto Loop;
+                    ;
+                case OpCode.LoadNil:
+                    Markers.LoadNil();
+                    var ra1 = iA + frameBase + 1;
+                    var iB = instruction.B;
+                    stackHead = ref stack.FastGet(ra1 - 1);
+                    for (var i = 0; i <= iB; i++)
+                    {
+                        Unsafe.Add(ref stackHead, i) = default;
+                    }
 
-                        stack.NotifyTop(ra1 + iB);
-                        continue;
-                    case OpCode.GetUpVal:
-                        Markers.GetUpVal();
-                        stack.GetWithNotifyTop(iA + frameBase) = context.LuaClosure.GetUpValue(instruction.B);
-                        continue;
-                    case OpCode.GetTabUp:
-                    case OpCode.GetTable:
-                        Markers.GetTabUp();
-                        Markers.GetTable();
-                        stackHead = ref stack.FastGet(frameBase);
-                        ref readonly var vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        ref readonly var vb = ref instruction.OpCode == OpCode.GetTable ? ref Unsafe.Add(ref stackHead, instruction.B) : ref context.LuaClosure.GetUpValueRef(instruction.B);
-                        var doRestart = false;
-                        if ((vb.TryReadTable(out var luaTable) && luaTable.TryGetValue(vc, out var resultValue)) || GetTableValueSlowPath(vb, vc, context, out resultValue, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            stack.GetWithNotifyTop(instruction.A + frameBase) = resultValue;
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.SetTabUp:
-                    case OpCode.SetTable:
-                        Markers.SetTabUp();
-                        Markers.SetTable();
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        if (vb.TryReadNumber(out var numB))
-                        {
-                            if (double.IsNaN(numB))
-                            {
-                                ThrowLuaRuntimeException(context, "table index is NaN");
-                                return true;
-                            }
-                        }
-
-                        var table = opCode == OpCode.SetTabUp ? context.LuaClosure.GetUpValue(iA) : Unsafe.Add(ref stackHead, iA);
-
-                        if (table.TryReadTable(out luaTable))
-                        {
-                            ref var valueRef = ref luaTable.FindValue(vb);
-                            if (!Unsafe.IsNullRef(ref valueRef) && valueRef.Type != LuaValueType.Nil)
-                            {
-                                valueRef = RKC(ref stackHead, ref constHead, instruction);
-                                continue;
-                            }
-                        }
-
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        if (SetTableValueSlowPath(table, vb, vc, context, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.SetUpVal:
-                        Markers.SetUpVal();
-                        context.LuaClosure.SetUpValue(instruction.B, stack.FastGet(iA + frameBase));
-                        continue;
-                    case OpCode.NewTable:
-                        Markers.NewTable();
-                        stack.GetWithNotifyTop(iA + frameBase) = new LuaTable(instruction.B, instruction.C);
-                        continue;
-                    case OpCode.Self:
-                        Markers.Self();
-                        stackHead = ref stack.FastGet(frameBase);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        table = Unsafe.Add(ref stackHead, instruction.B);
-
-                        doRestart = false;
-                        if ((table.TryReadTable(out luaTable) && luaTable.TryGetValue(vc, out resultValue)) || GetTableValueSlowPath(table, vc, context, out resultValue, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            Unsafe.Add(ref stackHead, iA) = resultValue;
-                            Unsafe.Add(ref stackHead, iA + 1) = table;
-                            stack.NotifyTop(iA + frameBase + 2);
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Add:
-                    case OpCode.Sub:
-                    case OpCode.Mul:
-                    case OpCode.Div:
-                    case OpCode.Mod:
-                    case OpCode.Pow:
-                        Markers.Add();
-                        Markers.Sub();
-                        Markers.Mul();
-                        Markers.Div();
-                        Markers.Mod();
-                        Markers.Pow();
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-
-                        [MethodImpl(MethodImplOptions.NoInlining)]
-                        static double Mod(double a, double b)
-                        {
-                            var mod = a % b;
-                            if ((b > 0 && mod < 0) || (b < 0 && mod > 0))
-                            {
-                                mod += b;
-                            }
-
-                            return mod;
-                        }
-
-                        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-                        static double ArithmeticOperation(OpCode code, double a, double b)
-                        {
-                            return code switch
-                            {
-                                OpCode.Add => a + b,
-                                OpCode.Sub => a - b,
-                                OpCode.Mul => a * b,
-                                OpCode.Div => a / b,
-                                OpCode.Mod => Mod(a, b),
-                                OpCode.Pow => Math.Pow(a, b),
-                                _ => 0
-                            };
-                        }
-
-                        if (vb.Type == LuaValueType.Number && vc.Type == LuaValueType.Number)
-                        {
-                            Unsafe.Add(ref stackHead, iA) = ArithmeticOperation(opCode, vb.UnsafeReadDouble(), vc.UnsafeReadDouble());
-                            stack.NotifyTop(iA + frameBase + 1);
-                            continue;
-                        }
-
-                        if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out var numC))
-                        {
-                            Unsafe.Add(ref stackHead, iA) = ArithmeticOperation(opCode, numB, numC);
-                            stack.NotifyTop(iA + frameBase + 1);
-                            continue;
-                        }
-
-                        if (ExecuteBinaryOperationMetaMethod(vb, vc, context, opCode, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Unm:
-                        Markers.Unm();
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref Unsafe.Add(ref stackHead, instruction.B);
-
-                        if (vb.TryReadDouble(out numB))
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = -numB;
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (ExecuteUnaryOperationMetaMethod(vb, context, OpCode.Unm, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Not:
-                        Markers.Not();
-                        stackHead = ref stack.FastGet(frameBase);
-                        Unsafe.Add(ref stackHead, iA) = !Unsafe.Add(ref stackHead, instruction.B).ToBoolean();
-                        stack.NotifyTop(iA + frameBase + 1);
-                        continue;
-
-                    case OpCode.Len:
-                        Markers.Len();
-                        stackHead = ref stack.FastGet(frameBase);
-                        vb = ref Unsafe.Add(ref stackHead, instruction.B);
-
-                        if (vb.TryReadString(out var str))
-                        {
-                            ra1 = iA + frameBase + 1;
-                            Unsafe.Add(ref stackHead, iA) = str.Length;
-                            stack.NotifyTop(ra1);
-                            continue;
-                        }
-
-                        if (ExecuteUnaryOperationMetaMethod(vb, context, OpCode.Len, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Concat:
-                        Markers.Concat();
-                        if (Concat(context))
-                        {
-                            //if (doRestart) goto Restart;
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Jmp:
-                        Markers.Jmp();
-                        context.Pc += instruction.SBx;
-
-                        if (iA != 0)
-                        {
-                            context.State.CloseUpValues( frameBase + iA - 1);
-                        }
-
-                        context.ThrowIfCancellationRequested();
-                        continue;
-                    case OpCode.Eq:
-                        Markers.Eq();
-                        stackHead = ref stack.Get(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-                        if (vb == vc)
-                        {
-                            if (iA != 1)
-                            {
-                                context.Pc++;
-                            }
-
-                            continue;
-                        }
-
-                        if (ExecuteCompareOperationMetaMethod(vb, vc, context, OpCode.Eq, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Lt:
-                    case OpCode.Le:
-                        Markers.Lt();
-                        Markers.Le();
-                        stackHead = ref stack.Get(frameBase);
-                        vb = ref RKB(ref stackHead, ref constHead, instruction);
-                        vc = ref RKC(ref stackHead, ref constHead, instruction);
-
-                        if (vb.TryReadNumber(out numB) && vc.TryReadNumber(out numC))
-                        {
-                            var compareResult = opCode == OpCode.Lt ? numB < numC : numB <= numC;
-                            if (compareResult != (iA == 1))
-                            {
-                                context.Pc++;
-                            }
-
-                            continue;
-                        }
-
-                        if (vb.TryReadString(out var strB) && vc.TryReadString(out var strC))
-                        {
-                            var c = StringComparer.Ordinal.Compare(strB, strC);
-                            var compareResult = opCode == OpCode.Lt ? c < 0 : c <= 0;
-                            if (compareResult != (iA == 1))
-                            {
-                                context.Pc++;
-                            }
-
-                            continue;
-                        }
-
-                        if (ExecuteCompareOperationMetaMethod(vb, vc, context, opCode, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Test:
-                        Markers.Test();
-                        if (stack.Get(iA + frameBase).ToBoolean() != (instruction.C == 1))
-                        {
-                            context.Pc++;
-                        }
-
-                        continue;
-                    case OpCode.TestSet:
-                        Markers.TestSet();
-                        vb = ref stack.Get(instruction.B + frameBase);
-                        if (vb.ToBoolean() != (instruction.C == 1))
-                        {
-                            context.Pc++;
-                        }
-                        else
-                        {
-                            stack.GetWithNotifyTop(iA + frameBase) = vb;
-                        }
-
-                        continue;
-
-                    case OpCode.Call:
-                        Markers.Call();
-                        if (Call(context, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.TailCall:
-                        Markers.TailCall();
-                        if (TailCall(context, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
-
-                            if (context.IsTopLevel)
-                            {
-                                goto End;
-                            }
-
-                            continue;
-                        }
-
-                        return true;
-                    case OpCode.Return:
-                        Markers.Return();
-                        context.State.CloseUpValues(frameBase);
-                        if (context.Pop(instruction, frameBase))
+                    stack.NotifyTop(ra1 + iB);
+                    goto Loop;
+                    ;
+                case OpCode.GetUpVal:
+                    Markers.GetUpVal();
+                    stack.GetWithNotifyTop(iA + frameBase) = context.LuaClosure.GetUpValue(instruction.B);
+                    goto Loop;
+                    ;
+                case OpCode.GetTabUp:
+                case OpCode.GetTable:
+                    Markers.GetTabUp();
+                    Markers.GetTable();
+                    stackHead = ref stack.FastGet(frameBase);
+                    ref readonly var vc = ref RKC(ref stackHead, ref constHead, instruction);
+                    ref readonly var vb = ref instruction.OpCode == OpCode.GetTable ? ref Unsafe.Add(ref stackHead, instruction.B) : ref context.LuaClosure.GetUpValueRef(instruction.B);
+                    var doRestart = false;
+                    if ((vb.TryReadTable(out var luaTable) && luaTable.TryGetValue(vc, out var resultValue)) || GetTableValueSlowPath(vb, vc, context, out resultValue, out doRestart))
+                    {
+                        if (doRestart)
                         {
                             goto Restart;
                         }
 
-                        goto End;
-                    case OpCode.ForLoop:
-                        Markers.ForLoop();
-                        ref var indexRef = ref stack.Get(iA + frameBase);
-                        var limit = Unsafe.Add(ref indexRef, 1).UnsafeReadDouble();
-                        var step = Unsafe.Add(ref indexRef, 2).UnsafeReadDouble();
-                        var index = indexRef.UnsafeReadDouble() + step;
+                        stack.GetWithNotifyTop(instruction.A + frameBase) = resultValue;
+                        goto Loop;
+                        ;
+                    }
 
-                        if (step >= 0 ? index <= limit : limit <= index)
+                    return true;
+                case OpCode.SetTabUp:
+                case OpCode.SetTable:
+                    Markers.SetTabUp();
+                    Markers.SetTable();
+                    stackHead = ref stack.FastGet(frameBase);
+                    vb = ref RKB(ref stackHead, ref constHead, instruction);
+                    if (vb.TryReadNumber(out var numB))
+                    {
+                        if (double.IsNaN(numB))
                         {
-                            context.Pc += instruction.SBx;
-                            indexRef = index;
-                            Unsafe.Add(ref indexRef, 3) = index;
-                            stack.NotifyTop(iA + frameBase + 4);
-                            context.ThrowIfCancellationRequested();
-                            continue;
+                            ThrowLuaRuntimeException(context, "table index is NaN");
+                            return true;
+                        }
+                    }
+
+                    var table = opCode == OpCode.SetTabUp ? context.LuaClosure.GetUpValue(iA) : Unsafe.Add(ref stackHead, iA);
+
+                    if (table.TryReadTable(out luaTable))
+                    {
+                        ref var valueRef = ref luaTable.FindValue(vb);
+                        if (!Unsafe.IsNullRef(ref valueRef) && valueRef.Type != LuaValueType.Nil)
+                        {
+                            valueRef = RKC(ref stackHead, ref constHead, instruction);
+                            goto Loop;
+                            ;
+                        }
+                    }
+
+                    vc = ref RKC(ref stackHead, ref constHead, instruction);
+                    if (SetTableValueSlowPath(table, vb, vc, context, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
                         }
 
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.SetUpVal:
+                    Markers.SetUpVal();
+                    context.LuaClosure.SetUpValue(instruction.B, stack.FastGet(iA + frameBase));
+                    goto Loop;
+                    ;
+                case OpCode.NewTable:
+                    Markers.NewTable();
+                    stack.GetWithNotifyTop(iA + frameBase) = new LuaTable(instruction.B, instruction.C);
+                    goto Loop;
+                    ;
+                case OpCode.Self:
+                    Markers.Self();
+                    stackHead = ref stack.FastGet(frameBase);
+                    vc = ref RKC(ref stackHead, ref constHead, instruction);
+                    table = Unsafe.Add(ref stackHead, instruction.B);
+
+                    doRestart = false;
+                    if ((table.TryReadTable(out luaTable) && luaTable.TryGetValue(vc, out resultValue)) || GetTableValueSlowPath(table, vc, context, out resultValue, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
+                        }
+
+                        Unsafe.Add(ref stackHead, iA) = resultValue;
+                        Unsafe.Add(ref stackHead, iA + 1) = table;
+                        stack.NotifyTop(iA + frameBase + 2);
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.Add:
+                case OpCode.Sub:
+                case OpCode.Mul:
+                case OpCode.Div:
+                case OpCode.Mod:
+                case OpCode.Pow:
+                    Markers.Add();
+                    Markers.Sub();
+                    Markers.Mul();
+                    Markers.Div();
+                    Markers.Mod();
+                    Markers.Pow();
+                    stackHead = ref stack.FastGet(frameBase);
+                    vb = ref RKB(ref stackHead, ref constHead, instruction);
+                    vc = ref RKC(ref stackHead, ref constHead, instruction);
+
+                    [MethodImpl(MethodImplOptions.NoInlining)]
+                    static double Mod(double a, double b)
+                    {
+                        var mod = a % b;
+                        if ((b > 0 && mod < 0) || (b < 0 && mod > 0))
+                        {
+                            mod += b;
+                        }
+
+                        return mod;
+                    }
+
+                    [MethodImpl(MethodImplOptions.AggressiveInlining)]
+                    static double ArithmeticOperation(OpCode code, double a, double b)
+                    {
+                        return code switch
+                        {
+                            OpCode.Add => a + b,
+                            OpCode.Sub => a - b,
+                            OpCode.Mul => a * b,
+                            OpCode.Div => a / b,
+                            OpCode.Mod => Mod(a, b),
+                            OpCode.Pow => Math.Pow(a, b),
+                            _ => 0
+                        };
+                    }
+
+                    if (vb.Type == LuaValueType.Number && vc.Type == LuaValueType.Number)
+                    {
+                        Unsafe.Add(ref stackHead, iA) = ArithmeticOperation(opCode, vb.UnsafeReadDouble(), vc.UnsafeReadDouble());
                         stack.NotifyTop(iA + frameBase + 1);
-                        continue;
-                    case OpCode.ForPrep:
-                        Markers.ForPrep();
-                        indexRef = ref stack.Get(iA + frameBase);
+                        goto Loop;
+                        ;
+                    }
 
-                        if (!indexRef.TryReadDouble(out var init))
-                        {
-                            ThrowLuaRuntimeException(context, "'for' initial value must be a number");
-                            return true;
-                        }
-
-                        if (!LuaValue.TryReadOrSetDouble(ref Unsafe.Add(ref indexRef, 1), out _))
-                        {
-                            ThrowLuaRuntimeException(context, "'for' limit must be a number");
-                            return true;
-                        }
-
-                        if (!LuaValue.TryReadOrSetDouble(ref Unsafe.Add(ref indexRef, 2), out step))
-                        {
-                            ThrowLuaRuntimeException(context, "'for' step must be a number");
-                            return true;
-                        }
-
-                        indexRef = init - step;
+                    if (vb.TryReadDouble(out numB) && vc.TryReadDouble(out var numC))
+                    {
+                        Unsafe.Add(ref stackHead, iA) = ArithmeticOperation(opCode, numB, numC);
                         stack.NotifyTop(iA + frameBase + 1);
-                        context.Pc += instruction.SBx;
-                        continue;
-                    case OpCode.TForCall:
-                        Markers.TForCall();
-                        if (TForCall(context, out doRestart))
-                        {
-                            if (doRestart)
-                            {
-                                goto Restart;
-                            }
+                        goto Loop;
+                        ;
+                    }
 
-                            continue;
+                    if (ExecuteBinaryOperationMetaMethod(vb, vc, context, opCode, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
                         }
 
-                        return true;
-                    case OpCode.TForLoop:
-                        Markers.TForLoop();
-                        ref var forState = ref stack.Get(iA + frameBase + 1);
+                        goto Loop;
+                        ;
+                    }
 
-                        if (forState.Type is not LuaValueType.Nil)
-                        {
-                            Unsafe.Add(ref forState, -1) = forState;
-                            context.Pc += instruction.SBx;
-                        }
+                    return true;
+                case OpCode.Unm:
+                    Markers.Unm();
+                    stackHead = ref stack.FastGet(frameBase);
+                    vb = ref Unsafe.Add(ref stackHead, instruction.B);
 
-                        continue;
-                    case OpCode.SetList:
-                        Markers.SetList();
-                        SetList(context);
-                        continue;
-                    case OpCode.Closure:
-                        Markers.Closure();
+                    if (vb.TryReadDouble(out numB))
+                    {
                         ra1 = iA + frameBase + 1;
-                        stack.EnsureCapacity(ra1);
-                        stack.Get(ra1 - 1) = new LuaClosure(context.State, context.Prototype.ChildPrototypes[instruction.Bx]);
+                        Unsafe.Add(ref stackHead, iA) = -numB;
                         stack.NotifyTop(ra1);
-                        continue;
-                    case OpCode.VarArg:
-                        Markers.VarArg();
-                        VarArg(context);
+                        goto Loop;
+                        ;
+                    }
 
-                        [MethodImpl(MethodImplOptions.NoInlining)]
-                        static void VarArg(VirtualMachineExecutionContext context)
+                    if (ExecuteUnaryOperationMetaMethod(vb, context, OpCode.Unm, out doRestart))
+                    {
+                        if (doRestart)
                         {
-                            var instruction = context.Instruction;
-                            var iA = instruction.A;
-                            var frameBase = context.FrameBase;
-                            var frameVariableArgumentCount = context.VariableArgumentCount;
-                            var count = instruction.B == 0
-                                ? frameVariableArgumentCount
-                                : instruction.B - 1;
-                            var ra = iA + frameBase;
-                            var stack = context.Stack;
-                            stack.EnsureCapacity(ra + count);
-                            ref var stackHead = ref stack.Get(0);
-                            for (var i = 0; i < count; i++)
-                            {
-                                Unsafe.Add(ref stackHead, ra + i) = frameVariableArgumentCount > i
-                                    ? Unsafe.Add(ref stackHead, frameBase - (frameVariableArgumentCount - i))
-                                    : default;
-                            }
-
-                            stack.NotifyTop(ra + count);
+                            goto Restart;
                         }
 
-                        continue;
-                    case (OpCode)40:
-                        if (context.State.Debugger is { } debugger)
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.Not:
+                    Markers.Not();
+                    stackHead = ref stack.FastGet(frameBase);
+                    Unsafe.Add(ref stackHead, iA) = !Unsafe.Add(ref stackHead, instruction.B).ToBoolean();
+                    stack.NotifyTop(iA + frameBase + 1);
+                    goto Loop;
+                    ;
+
+                case OpCode.Len:
+                    Markers.Len();
+                    stackHead = ref stack.FastGet(frameBase);
+                    vb = ref Unsafe.Add(ref stackHead, instruction.B);
+
+                    if (vb.TryReadString(out var str))
+                    {
+                        ra1 = iA + frameBase + 1;
+                        Unsafe.Add(ref stackHead, iA) = str.Length;
+                        stack.NotifyTop(ra1);
+                        goto Loop;
+                        ;
+                    }
+
+                    if (ExecuteUnaryOperationMetaMethod(vb, context, OpCode.Len, out doRestart))
+                    {
+                        if (doRestart)
                         {
-                            context.Instruction= instruction = debugger .HandleDebugBreak(context.State, context.Pc, context.LuaClosure);
+                            goto Restart;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.Concat:
+                    Markers.Concat();
+                    if (Concat(context))
+                    {
+                        //if (doRestart) goto Restart;
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.Jmp:
+                    Markers.Jmp();
+                    context.Pc += instruction.SBx;
+
+                    if (iA != 0)
+                    {
+                        context.State.CloseUpValues(frameBase + iA - 1);
+                    }
+
+                    context.ThrowIfCancellationRequested();
+                    goto Loop;
+                    ;
+                case OpCode.Eq:
+                    Markers.Eq();
+                    stackHead = ref stack.Get(frameBase);
+                    vb = ref RKB(ref stackHead, ref constHead, instruction);
+                    vc = ref RKC(ref stackHead, ref constHead, instruction);
+                    if (vb == vc)
+                    {
+                        if (iA != 1)
+                        {
+                            context.Pc++;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    if (ExecuteCompareOperationMetaMethod(vb, vc, context, OpCode.Eq, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.Lt:
+                case OpCode.Le:
+                    Markers.Lt();
+                    Markers.Le();
+                    stackHead = ref stack.Get(frameBase);
+                    vb = ref RKB(ref stackHead, ref constHead, instruction);
+                    vc = ref RKC(ref stackHead, ref constHead, instruction);
+
+                    if (vb.TryReadNumber(out numB) && vc.TryReadNumber(out numC))
+                    {
+                        var compareResult = opCode == OpCode.Lt ? numB < numC : numB <= numC;
+                        if (compareResult != (iA == 1))
+                        {
+                            context.Pc++;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    if (vb.TryReadString(out var strB) && vc.TryReadString(out var strC))
+                    {
+                        var c = StringComparer.Ordinal.Compare(strB, strC);
+                        var compareResult = opCode == OpCode.Lt ? c < 0 : c <= 0;
+                        if (compareResult != (iA == 1))
+                        {
+                            context.Pc++;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    if (ExecuteCompareOperationMetaMethod(vb, vc, context, opCode, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.Test:
+                    Markers.Test();
+                    if (stack.Get(iA + frameBase).ToBoolean() != (instruction.C == 1))
+                    {
+                        context.Pc++;
+                    }
+
+                    goto Loop;
+                    ;
+                case OpCode.TestSet:
+                    Markers.TestSet();
+                    vb = ref stack.Get(instruction.B + frameBase);
+                    if (vb.ToBoolean() != (instruction.C == 1))
+                    {
+                        context.Pc++;
+                    }
+                    else
+                    {
+                        stack.GetWithNotifyTop(iA + frameBase) = vb;
+                    }
+
+                    goto Loop;
+                    ;
+
+                case OpCode.Call:
+                    Markers.Call();
+                    if (Call(context, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.TailCall:
+                    Markers.TailCall();
+                    if (TailCall(context, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
+                        }
+
+                        if (context.IsTopLevel)
+                        {
+                            goto End;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.Return:
+                    Markers.Return();
+                    context.State.CloseUpValues(frameBase);
+                    if (context.Pop(instruction, frameBase))
+                    {
+                        goto Restart;
+                    }
+
+                    goto End;
+                case OpCode.ForLoop:
+                    Markers.ForLoop();
+                    ref var indexRef = ref stack.Get(iA + frameBase);
+                    var limit = Unsafe.Add(ref indexRef, 1).UnsafeReadDouble();
+                    var step = Unsafe.Add(ref indexRef, 2).UnsafeReadDouble();
+                    var index = indexRef.UnsafeReadDouble() + step;
+
+                    if (step >= 0 ? index <= limit : limit <= index)
+                    {
+                        context.Pc += instruction.SBx;
+                        indexRef = index;
+                        Unsafe.Add(ref indexRef, 3) = index;
+                        stack.NotifyTop(iA + frameBase + 4);
+                        context.ThrowIfCancellationRequested();
+                        goto Loop;
+                        ;
+                    }
+
+                    stack.NotifyTop(iA + frameBase + 1);
+                    goto Loop;
+                    ;
+                case OpCode.ForPrep:
+                    Markers.ForPrep();
+                    indexRef = ref stack.Get(iA + frameBase);
+
+                    if (!indexRef.TryReadDouble(out var init))
+                    {
+                        ThrowLuaRuntimeException(context, "'for' initial value must be a number");
+                        return true;
+                    }
+
+                    if (!LuaValue.TryReadOrSetDouble(ref Unsafe.Add(ref indexRef, 1), out _))
+                    {
+                        ThrowLuaRuntimeException(context, "'for' limit must be a number");
+                        return true;
+                    }
+
+                    if (!LuaValue.TryReadOrSetDouble(ref Unsafe.Add(ref indexRef, 2), out step))
+                    {
+                        ThrowLuaRuntimeException(context, "'for' step must be a number");
+                        return true;
+                    }
+
+                    indexRef = init - step;
+                    stack.NotifyTop(iA + frameBase + 1);
+                    context.Pc += instruction.SBx;
+                    goto Loop;
+                    ;
+                case OpCode.TForCall:
+                    Markers.TForCall();
+                    if (TForCall(context, out doRestart))
+                    {
+                        if (doRestart)
+                        {
+                            goto Restart;
+                        }
+
+                        goto Loop;
+                        ;
+                    }
+
+                    return true;
+                case OpCode.TForLoop:
+                    Markers.TForLoop();
+                    ref var forState = ref stack.Get(iA + frameBase + 1);
+
+                    if (forState.Type is not LuaValueType.Nil)
+                    {
+                        Unsafe.Add(ref forState, -1) = forState;
+                        context.Pc += instruction.SBx;
+                    }
+
+                    goto Loop;
+                    ;
+                case OpCode.SetList:
+                    Markers.SetList();
+                    SetList(context);
+                    goto Loop;
+                    ;
+                case OpCode.Closure:
+                    Markers.Closure();
+                    ra1 = iA + frameBase + 1;
+                    stack.EnsureCapacity(ra1);
+                    stack.Get(ra1 - 1) = new LuaClosure(context.State, context.Prototype.ChildPrototypes[instruction.Bx]);
+                    stack.NotifyTop(ra1);
+                    goto Loop;
+                    ;
+                case OpCode.VarArg:
+                    Markers.VarArg();
+                    VarArg(context);
+
+                    [MethodImpl(MethodImplOptions.NoInlining)]
+                    static void VarArg(VirtualMachineExecutionContext context)
+                    {
+                        var instruction = context.Instruction;
+                        var iA = instruction.A;
+                        var frameBase = context.FrameBase;
+                        var frameVariableArgumentCount = context.VariableArgumentCount;
+                        var count = instruction.B == 0
+                            ? frameVariableArgumentCount
+                            : instruction.B - 1;
+                        var ra = iA + frameBase;
+                        var stack = context.Stack;
+                        stack.EnsureCapacity(ra + count);
+                        ref var stackHead = ref stack.Get(0);
+                        for (var i = 0; i < count; i++)
+                        {
+                            Unsafe.Add(ref stackHead, ra + i) = frameVariableArgumentCount > i
+                                ? Unsafe.Add(ref stackHead, frameBase - (frameVariableArgumentCount - i))
+                                : default;
+                        }
+
+                        stack.NotifyTop(ra + count);
+                    }
+
+                    goto Loop;
+                    ;
+                case (OpCode)40:
+                    if (context.State.Debugger is { } debugger)
+                    {
+                        var debugTask = debugger.HandleDebugBreak(context.State, context.Pc, context.LuaClosure);
+                        if (debugTask.IsCompleted)
+                        {
+                            context.Instruction = instruction = debugTask.Result;
                             goto DebugResume;
                         }
-                        continue;
-                    default:
-                        ThrowLuaNotImplementedException(context, context.Instruction.OpCode);
-                        return true;
-                }
+                        else
+                        {
+                            static async ValueTask<int> Convert(ValueTask<Instruction> task)
+                            {
+                                var instruction = await task;
+                                return (int)instruction.Value;
+                            }
+
+                            context.Task = Convert(debugTask);
+                            context.PostOperation = PostOperationType.DebugResume;
+                            return true;
+                        }
+                    }
+
+                    goto Loop;
+                    ;
+                default:
+                    ThrowLuaNotImplementedException(context, context.Instruction.OpCode);
+                    return true;
             }
+
 
         End:
             context.PostOperation = PostOperationType.None;
@@ -1180,10 +1250,10 @@ public static partial class LuaVirtualMachine
             var newFrame = func.CreateNewFrame(context, stack.Count - argCount + varArgCount, target, varArgCount);
             var state = context.State;
             state.PushCallStackFrame(newFrame);
-            
+
             try
             {
-                var functionContext = new LuaFunctionExecutionContext {State = state, ArgumentCount = argCount, ReturnFrameBase = target };
+                var functionContext = new LuaFunctionExecutionContext { State = state, ArgumentCount = argCount, ReturnFrameBase = target };
                 if (state.CallOrReturnHookMask.Value != 0 && !state.IsInHook)
                 {
                     await ExecuteCallHook(functionContext, context.CancellationToken);
@@ -1240,7 +1310,7 @@ public static partial class LuaVirtualMachine
         var newFrame = func.CreateNewFrame(context, newBase, RA, variableArgumentCount);
 
         state.PushCallStackFrame(newFrame);
-        if (state.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+        if (state.ShouldHookCall && !context.State.IsInHook)
         {
             context.PostOperation = PostOperationType.Call;
             context.Task = ExecuteCallHook(context, newFrame, argumentCount);
@@ -1260,7 +1330,7 @@ public static partial class LuaVirtualMachine
 
         static bool FuncCall(VirtualMachineExecutionContext context, LuaState state, LuaFunction func, int argumentCount, int returnBase)
         {
-            var task = func.Func(new() {State = state, ArgumentCount = argumentCount, ReturnFrameBase = returnBase }, context.CancellationToken);
+            var task = func.Func(new() { State = state, ArgumentCount = argumentCount, ReturnFrameBase = returnBase }, context.CancellationToken);
 
             if (!task.IsCompleted)
             {
@@ -1371,7 +1441,7 @@ public static partial class LuaVirtualMachine
         var isMetamethod = false;
         var state = context.State;
 
-        state.CloseUpValues( context.FrameBase);
+        state.CloseUpValues(context.FrameBase);
 
         var va = stack.Get(RA);
         if (!va.TryReadFunction(out var func))
@@ -1400,7 +1470,7 @@ public static partial class LuaVirtualMachine
         newFrame.CallerInstructionIndex = lastFrame.CallerInstructionIndex;
         state.PushCallStackFrame(newFrame);
 
-        if (state.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+        if (state.ShouldHookCall && !context.State.IsInHook)
         {
             context.PostOperation = PostOperationType.TailCall;
             context.Task = ExecuteCallHook(context, newFrame, argumentCount, true);
@@ -1417,7 +1487,7 @@ public static partial class LuaVirtualMachine
         }
 
         doRestart = false;
-        var task = func.Func(new() {State = state, ArgumentCount = argumentCount, ReturnFrameBase = lastFrame.ReturnBase }, context.CancellationToken);
+        var task = func.Func(new() { State = state, ArgumentCount = argumentCount, ReturnFrameBase = lastFrame.ReturnBase }, context.CancellationToken);
 
         if (!task.IsCompleted)
         {
@@ -1488,7 +1558,7 @@ public static partial class LuaVirtualMachine
 
         var newFrame = iterator.CreateNewFrame(context, newBase, RA + 3, variableArgumentCount);
         context.State.PushCallStackFrame(newFrame);
-        if (context.State.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+        if (context.State.ShouldHookCall && !context.State.IsInHook)
         {
             context.PostOperation = PostOperationType.TForCall;
             context.Task = ExecuteCallHook(context, newFrame, stack.Count - newBase);
@@ -1503,7 +1573,7 @@ public static partial class LuaVirtualMachine
             return true;
         }
 
-        var task = iterator.Func(new() {State = context.State, ArgumentCount = stack.Count - newBase, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
+        var task = iterator.Func(new() { State = context.State, ArgumentCount = stack.Count - newBase, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
         if (!task.IsCompleted)
         {
             context.PostOperation = PostOperationType.TForCall;
@@ -1655,7 +1725,7 @@ public static partial class LuaVirtualMachine
         var newFrame = indexTable.CreateNewFrame(context, stack.Count - 2);
 
         context.State.PushCallStackFrame(newFrame);
-        if (context.State.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+        if (context.State.ShouldHookCall && !context.State.IsInHook)
         {
             context.PostOperation = context.Instruction.OpCode == OpCode.GetTable ? PostOperationType.SetResult : PostOperationType.Self;
             context.Task = ExecuteCallHook(context, newFrame, 2);
@@ -1672,7 +1742,7 @@ public static partial class LuaVirtualMachine
             return true;
         }
 
-        var task = indexTable.Func(new() {State = context.State, ArgumentCount = 2, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
+        var task = indexTable.Func(new() { State = context.State, ArgumentCount = 2, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
 
         if (!task.IsCompleted)
         {
@@ -1744,7 +1814,7 @@ public static partial class LuaVirtualMachine
         var newFrame = new CallStackFrame { Base = state.Stack.Count - 2 + varArgCount, VariableArgumentCount = varArgCount, Function = indexTable, ReturnBase = top };
 
         state.PushCallStackFrame(newFrame);
-        var functionContext = new LuaFunctionExecutionContext {State = state, ArgumentCount = 2, ReturnFrameBase = top };
+        var functionContext = new LuaFunctionExecutionContext { State = state, ArgumentCount = 2, ReturnFrameBase = top };
         if (state.CallOrReturnHookMask.Value != 0 && !state.IsInHook)
         {
             await ExecuteCallHook(functionContext, ct);
@@ -1845,7 +1915,7 @@ public static partial class LuaVirtualMachine
         var newFrame = newIndexFunction.CreateNewFrame(context, stack.Count - 3);
 
         context.State.PushCallStackFrame(newFrame);
-        if (context.State.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+        if (context.State.ShouldHookCall && !context.State.IsInHook)
         {
             context.PostOperation = PostOperationType.Nop;
             context.Task = ExecuteCallHook(context, newFrame, 3);
@@ -1979,7 +2049,7 @@ public static partial class LuaVirtualMachine
             var newFrame = func.CreateNewFrame(context, newBase, newBase, variableArgumentCount);
 
             context.State.PushCallStackFrame(newFrame);
-            if (context.State.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+            if (context.State.ShouldHookCall && !context.State.IsInHook)
             {
                 context.PostOperation = PostOperationType.SetResult;
                 context.Task = ExecuteCallHook(context, newFrame, argCount);
@@ -1995,7 +2065,7 @@ public static partial class LuaVirtualMachine
             }
 
 
-            var task = func.Func(new() {State = context.State, ArgumentCount = argCount, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
+            var task = func.Func(new() { State = context.State, ArgumentCount = argCount, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
 
             if (!task.IsCompleted)
             {
@@ -2051,7 +2121,7 @@ public static partial class LuaVirtualMachine
             state.PushCallStackFrame(newFrame);
             try
             {
-                var functionContext = new LuaFunctionExecutionContext {State = state, ArgumentCount = argCount, ReturnFrameBase = newBase };
+                var functionContext = new LuaFunctionExecutionContext { State = state, ArgumentCount = argCount, ReturnFrameBase = newBase };
                 if (state.CallOrReturnHookMask.Value != 0 && !state.IsInHook)
                 {
                     await ExecuteCallHook(functionContext, ct);
@@ -2106,7 +2176,7 @@ public static partial class LuaVirtualMachine
             var newFrame = func.CreateNewFrame(context, newBase, newBase, variableArgumentCount);
 
             context.State.PushCallStackFrame(newFrame);
-            if (context.State.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+            if (context.State.ShouldHookCall && !context.State.IsInHook)
             {
                 context.PostOperation = PostOperationType.SetResult;
                 context.Task = ExecuteCallHook(context, newFrame, argCount);
@@ -2122,7 +2192,7 @@ public static partial class LuaVirtualMachine
             }
 
 
-            var task = func.Func(new() {State = context.State, ArgumentCount = argCount, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
+            var task = func.Func(new() { State = context.State, ArgumentCount = argCount, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
 
             if (!task.IsCompleted)
             {
@@ -2185,7 +2255,7 @@ public static partial class LuaVirtualMachine
             state.PushCallStackFrame(newFrame);
             try
             {
-                var functionContext = new LuaFunctionExecutionContext {State = state, ArgumentCount = argCount, ReturnFrameBase = newBase };
+                var functionContext = new LuaFunctionExecutionContext { State = state, ArgumentCount = argCount, ReturnFrameBase = newBase };
                 if (state.CallOrReturnHookMask.Value != 0 && !state.IsInHook)
                 {
                     await ExecuteCallHook(functionContext, cancellationToken);
@@ -2249,7 +2319,7 @@ public static partial class LuaVirtualMachine
             }
 
             context.State.PushCallStackFrame(newFrame);
-            if (context.State.CallOrReturnHookMask.Value != 0 && !context.State.IsInHook)
+            if (context.State.ShouldHookCall && !context.State.IsInHook)
             {
                 context.PostOperation = PostOperationType.Compare;
                 context.Task = ExecuteCallHook(context, newFrame, argCount);
@@ -2264,7 +2334,7 @@ public static partial class LuaVirtualMachine
                 return true;
             }
 
-            var task = func.Func(new() {State = context.State, ArgumentCount = argCount, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
+            var task = func.Func(new() { State = context.State, ArgumentCount = argCount, ReturnFrameBase = newFrame.ReturnBase }, context.CancellationToken);
 
             if (!task.IsCompleted)
             {
@@ -2351,7 +2421,7 @@ public static partial class LuaVirtualMachine
             state.PushCallStackFrame(newFrame);
             try
             {
-                var functionContext = new LuaFunctionExecutionContext {State = state, ArgumentCount = argCount, ReturnFrameBase = newBase };
+                var functionContext = new LuaFunctionExecutionContext { State = state, ArgumentCount = argCount, ReturnFrameBase = newBase };
                 if (state.CallOrReturnHookMask.Value != 0 && !state.IsInHook)
                 {
                     await ExecuteCallHook(functionContext, cancellationToken);

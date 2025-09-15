@@ -347,7 +347,7 @@ static class RpcServer
             locals = LuaDebugSession.Current?.GetLocalsForFrame(fid) ?? Array.Empty<object>();
         else
             locals = LuaDebugSession.Current?.GetLocals() ?? Array.Empty<object>();
-        WriteResponse (id, "variables"u8, locals);
+        WriteResponse(id, "variables"u8, locals);
     }
 
     static void HandleNext(int id)
@@ -380,7 +380,7 @@ static class RpcServer
     static void HandleGetGlobals(int id)
     {
         var globals = LuaDebugSession.Current?.GetGlobals() ?? Array.Empty<object>();
-        WriteResponse (id ,"variables"u8, globals);
+        WriteResponse(id, "variables"u8, globals);
     }
 
     static void HandleGetOptions(int id)

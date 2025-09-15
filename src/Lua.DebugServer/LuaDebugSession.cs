@@ -92,6 +92,8 @@ sealed class LuaDebugSession
             return null;
         }
     }
+    
+    
 
     public async Task LaunchAsync(string program, string? cwd, bool stopOnEntry)
     {
@@ -156,14 +158,14 @@ sealed class LuaDebugSession
         debugger = dbg;
     }
 
-    public static void PauseForBreakpoint(string file, int line, string reason = "breakpoint")
+    public static Task PauseForBreakpoint(string file, int line, string reason = "breakpoint")
     {
         var s = Current;
 
         if (s is null)
         {
             RpcServer.Publish("output", new { category = "stderr", output = "[Lua.DebugServer] Warning: Breakpoint hit but no debug session is active.\n" });
-            return;
+            return Task.CompletedTask;
         }
 
         Task toWait;
@@ -188,7 +190,7 @@ sealed class LuaDebugSession
         }
 
         RpcServer.Publish("wait", new { reason = "started", threadId = 1 });
-        toWait.Wait();
+        return toWait;
     }
 
     string? ResolveSourcePath(string chunk)

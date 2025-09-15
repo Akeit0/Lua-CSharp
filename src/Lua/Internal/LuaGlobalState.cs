@@ -40,6 +40,8 @@ sealed class LuaGlobalState
     public ILuaModuleLoader? ModuleLoader { get; set; }
 
     public IDebugger? Debugger { get; set; }
+    
+    internal StepMode DebuggerStepMode  = StepMode.None;
 
     // metatables
     LuaTable? nilMetatable;

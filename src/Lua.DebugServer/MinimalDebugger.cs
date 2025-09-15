@@ -1,10 +1,26 @@
 using Lua;
 using Lua.Debugging;
 using Lua.Runtime;
+using System.Diagnostics.CodeAnalysis;
 
 class MinimalDebugger : IDebugger
 {
     public static MinimalDebugger? Active;
+
+    [field:AllowNull]
+    public Func<Task, ValueTask> OnContinue {
+        get
+        {
+            return field ??= async (t) =>
+            {
+                t.Wait();
+                await Task.Delay(1);
+                return ;
+            };
+            
+        }
+        set => field = value;
+    }
 
     public MinimalDebugger()
     {
@@ -152,7 +168,7 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public Instruction HandleDebugBreak(LuaState thread, int pc, LuaClosure closure)
+    public async ValueTask<Instruction> HandleDebugBreak(LuaState thread, int pc, LuaClosure closure)
     {
         lastThread = thread;
         var proto = closure.Proto;
@@ -269,7 +285,8 @@ class MinimalDebugger : IDebugger
                 LuaDebugSession.Current?.UpdateStoppedContext(thread, pc, closure);
                 var file = proto.ChunkName.TrimStart('@');
                 var line = proto.LineInfo[pc];
-                LuaDebugSession.PauseForBreakpoint(file, line);
+                var task=LuaDebugSession.PauseForBreakpoint(file, line);
+               await OnContinue.Invoke(task);
             }
 
             // If any step was active, clean them all up (regardless of where we stopped)
@@ -277,7 +294,7 @@ class MinimalDebugger : IDebugger
             // stepMode = StepMode.None;
             //RpcServer .WriteToConsole($"[Lua.DebugServer] Resuming from breakpoint at {proto.ChunkName.TrimStart('@')}:{proto.LineInfo[pc]} (instruction {pc})");
 
-            return oldInstruction;
+            return (oldInstruction);
         }
     }
 
@@ -458,6 +475,7 @@ class MinimalDebugger : IDebugger
             }
 
             stepMode = StepMode.None;
+            DebugUtility .SetStepMode(lastThread!, StepMode.None);
         }
     }
 
@@ -560,7 +578,7 @@ class MinimalDebugger : IDebugger
     }
 
     // New IDebugger methods for call stack notifications
-    public void OnPushCallStackFrame(LuaState thread)
+    public async ValueTask OnPushCallStackFrame(LuaState thread)
     {
         RpcServer.WriteToConsole($"[Lua.DebugServer] OnPushCallStackFrame (stepMode={stepMode})");
 
@@ -574,11 +592,12 @@ class MinimalDebugger : IDebugger
                 LuaDebugSession.Current?.UpdateStoppedContext(thread, 0, clo);
                 var file = p.ChunkName.TrimStart('@');
                 var line = p.LineInfo[0];
-                LuaDebugSession.PauseForBreakpoint(file, line);
+                RpcServer.WriteToConsole($"[Lua.DebugServer] Pause");
+                await OnContinue.Invoke(LuaDebugSession.PauseForBreakpoint(file, line));
             }
             else
             {
-                //RpcServer.WriteLogToConsole($"[Lua.DebugServer] OnPushCallStackFrame: callee is not a LuaClosure");
+                RpcServer.WriteLogToConsole($"[Lua.DebugServer] OnPushCallStackFrame: callee is not a LuaClosure {f.Function}");
                 // var caller = thread.GetCallStackFrames()[^2];
                 // if (caller.Function is LuaClosure callerClosure)
                 // {
@@ -603,7 +622,7 @@ class MinimalDebugger : IDebugger
         }
     }
 
-    public void OnPopCallStackFrame(LuaState thread, ref CallStackFrame poppedFrame)
+    public async ValueTask OnPopCallStackFrame(LuaState thread,  int pc)
     {
         //RpcServer.WriteToConsole($"[Lua.DebugServer] OnPopCallStackFrame (stepMode={stepMode})");
 
@@ -612,23 +631,24 @@ class MinimalDebugger : IDebugger
             if (stepMode == StepMode.Over)
             {
                 pushCount--;
-                if (pushCount > 0) return;
+                if (pushCount > 0) return ;
                 stepMode = StepMode.None;
-                return;
+                DebugUtility.SetStepMode(lastThread!, StepMode.None);
+                return ;
             }
 
             // After pop, current frame is caller; arm a step at the next different line after the call site
-            var f = poppedFrame;
             var caller = thread.GetCurrentFrame();
-            if (f.Function is LuaClosure && caller.Function is LuaClosure clo)
+            if (caller.Function is LuaClosure clo)
             {
                 var p = clo.Proto;
-                var callPc = f.CallerInstructionIndex;
+                var callPc = pc ;
                 LuaDebugSession.Current?.UpdateStoppedContext(thread, callPc, clo);
                 var file = p.ChunkName.TrimStart('@');
                 var line = p.LineInfo[callPc];
                 RpcServer.WriteLogToConsole($"[Lua.DebugServer] Step-Out to {file}:{line} (instruction {callPc})");
-                LuaDebugSession.PauseForBreakpoint(file, line);
+                await OnContinue.Invoke(LuaDebugSession.PauseForBreakpoint(file, line));
+
             }
             else
             {
@@ -644,6 +664,7 @@ class MinimalDebugger : IDebugger
         {
             SetStepToNext(proto, pc, stepIn: true);
             stepMode = StepMode.In;
+            DebugUtility.SetStepMode( lastThread!, StepMode.In);
             //RpcServer .WriteToConsole($"[Lua.DebugServer] Step-In armed");
         }
     }
@@ -654,6 +675,7 @@ class MinimalDebugger : IDebugger
         {
             DeleteStepBreak();
             stepMode = StepMode.Out;
+            DebugUtility.SetStepMode(lastThread!, StepMode.Out);
         }
     }
 
@@ -923,7 +945,6 @@ class MinimalDebugger : IDebugger
     }
 }
 
-enum StepMode { None, Over, In, Out }
 
 public enum StepOverMode
 {
