@@ -31,6 +31,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
   };
   private launched = false;
   private lastStopped?: { file?: string; line?: number };
+  private lastException?: { type: string; message: string; stack: string };
   private pending = new Map<number, { resolve: (v: any) => void; reject: (e: any) => void }>();
   private nextVarRef = 1;
   private localsRef = 0;
@@ -64,6 +65,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     response.body.supportsConditionalBreakpoints = true;
     response.body.supportsHitConditionalBreakpoints = true;
     response.body.supportsLogPoints = true;
+    response.body.supportsExceptionInfoRequest = true;
     response.body.supportsSetVariable = true;
     this.sendResponse(response);
     this.sendEvent(new InitializedEvent());
@@ -183,7 +185,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       this.proc.kill();
     }
     if (this.socket) {
-      try { this.rpcSend({ method: 'terminate' }); } catch {}
+      try { this.rpcSend({ method: 'terminate' }); } catch { }
       this.socket.end();
       this.socket.destroy();
       this.socket = undefined;
@@ -292,15 +294,22 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             // Invalidate previous locals reference and generate a new one for this stop
             this.localsRef = ++this.nextVarRef;
             this.globalsRef = ++this.nextVarRef;
-          this.upvaluesRef = ++this.nextVarRef;
-          // New pause: reset frame selection and bytecode cache
-          this.currentFrameId = 1;
-          this.pauseToken++;
-          this.bytecodeCache.clear();
-          this.localsRefByFrame.clear();
-          this.upvaluesRefByFrame.clear();
-          this.frameByVarRef.clear();
-          this.sendEvent(new StoppedEvent(reason, this.threadId));
+            this.upvaluesRef = ++this.nextVarRef;
+            // New pause: reset frame selection and bytecode cache
+            this.currentFrameId = 1;
+            this.pauseToken++;
+            this.bytecodeCache.clear();
+            this.localsRefByFrame.clear();
+            this.upvaluesRefByFrame.clear();
+            this.frameByVarRef.clear();
+            if(msg.body?.exception) {
+              this.lastException = {
+                type: msg.body.exception.type,
+                message: msg.body.exception.message,
+                stack: msg.body.exception.stack
+              };
+            }
+            this.sendEvent(new StoppedEvent(reason, this.threadId));
             // Update bytecode viewer if open; otherwise open if configured
             if (panelHost.isOpen()) {
               this.renderBytecode();
@@ -475,7 +484,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
         }
         response.body = { stackFrames: sf, totalFrames: sf.length };
         this.sendResponse(response);
-        
+
       });
   }
 
@@ -521,7 +530,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
       ],
     };
     this.sendResponse(response);
-    
+
   }
 
   protected variablesRequest(
@@ -541,7 +550,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
-          
+
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getLocals error: ${err}\n`));
@@ -560,7 +569,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
-          
+
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getUpvalues error: ${err}\n`));
@@ -580,7 +589,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
-          
+
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getLocals error: ${err}\n`));
@@ -597,7 +606,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
             variables: vars.map((v) => ({ name: v.name, value: v.value, variablesReference: 0 })),
           };
           this.sendResponse(response);
-          
+
         })
         .catch((err) => {
           this.sendEvent(new OutputEvent(`[lua-csharp] getGlobals error: ${err}\n`));
@@ -624,7 +633,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     } else {
       response.body = { variables: [] };
       this.sendResponse(response);
-      
+
     }
   }
 
@@ -662,6 +671,20 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     }
     // Not supported for other scopes
     response.body = { value } as any;
+    this.sendResponse(response);
+  }
+
+  protected exceptionInfoRequest(response: DebugProtocol.ExceptionInfoResponse, args: DebugProtocol.ExceptionInfoArguments) {
+    response.body = {
+      exceptionId: '',
+      description: this.lastException?.message || 'This is a descriptive description of the exception.',
+      breakMode: 'always',
+      details: {
+        //message: this.lastException?.message || 'Exception message',
+        typeName: this.lastException?.type || 'ExceptionType',
+        //stackTrace: this.lastException?.stack || '',
+      }
+    };
     this.sendResponse(response);
   }
 
@@ -730,7 +753,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     if (!panelHost.isOpen()) return;
     try {
       const fid = this.currentFrameId || 1;
-      console .log(`Rendering bytecode for frame ${fid}`);
+      console.log(`Rendering bytecode for frame ${fid}`);
       let res = this.bytecodeCache.get(fid);
       if (!res) {
         res = await this.rpcCall('getBytecode', { frameId: fid });
@@ -872,7 +895,7 @@ export class LuaCSharpDebugSession extends LoggingDebugSession {
     });
   });
 </script>`;
-      `
+    `
 <script>
   // Auto-scroll current instruction into view
   (function() {

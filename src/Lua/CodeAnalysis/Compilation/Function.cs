@@ -98,7 +98,7 @@ class Function : IPoolNode<Function>
 
     public void OpenFunction(int line)
     {
-        var newProto = PrototypeBuilder.Get(P.Scanner.Source);
+        var newProto = PrototypeBuilder.Get(P.Scanner.L,P.Scanner.Source);
         newProto.Source = P.Scanner.Source;
         newProto.MaxStackSize = 2;
         newProto.LineDefined = line;

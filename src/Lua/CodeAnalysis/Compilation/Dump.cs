@@ -280,7 +280,7 @@ unsafe ref struct DumpState(IBufferWriter<byte> writer, bool reversedEndian)
     }
 }
 
-unsafe ref struct UnDumpState(ReadOnlySpan<byte> span, ReadOnlySpan<char> name, StringInternPool internPool)
+unsafe ref struct UnDumpState(LuaState state,ReadOnlySpan<byte> span, ReadOnlySpan<char> name, StringInternPool internPool)
 {
     public ReadOnlySpan<byte> Unread = span;
     bool otherEndian;
@@ -413,7 +413,7 @@ unsafe ref struct UnDumpState(ReadOnlySpan<byte> span, ReadOnlySpan<char> name, 
             desc.Name = name;
         }
 
-        return new(source, lineDefined, lastLineDefined, parameterCount, maxStackSize, isVarArg, constants, code, prototypes, lineInfo, localVariables, upValues);
+        return new(state,source, lineDefined, lastLineDefined, parameterCount, maxStackSize, isVarArg, constants, code, prototypes, lineInfo, localVariables, upValues);
     }
 
 

@@ -949,7 +949,7 @@ class Parser : IPoolNode<Parser>, IDisposable
             Buffer = new(r.Length),
             StringPool = internPool
         });
-        var f = Function.Get(p, PrototypeBuilder.Get(name));
+        var f = Function.Get(p, PrototypeBuilder.Get(l,name));
         p.Function = f;
         f.Proto.IsVarArg = true;
         f.Proto.LineDefined = 0;
@@ -970,7 +970,7 @@ class Parser : IPoolNode<Parser>, IDisposable
         return writer.WrittenSpan.ToArray();
     }
 
-    public static Prototype UnDump(ReadOnlySpan<byte> span, ReadOnlySpan<char> name)
+    public static Prototype UnDump(LuaState state,ReadOnlySpan<byte> span, ReadOnlySpan<char> name)
     {
         if (name.Length > 0)
         {
@@ -983,7 +983,7 @@ class Parser : IPoolNode<Parser>, IDisposable
         }
 
         using var internPool = new StringInternPool(4);
-        UnDumpState state = new(span, name, internPool);
-        return state.UnDump();
+        UnDumpState unDumpState = new(state,span, name, internPool);
+        return unDumpState.UnDump();
     }
 }

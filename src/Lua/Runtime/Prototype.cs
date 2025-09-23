@@ -1,10 +1,12 @@
 using Lua.CodeAnalysis;
 using Lua.CodeAnalysis.Compilation;
+using Lua.Debugging;
 using System.Buffers;
 
 namespace Lua.Runtime;
 
 public sealed class Prototype(
+    LuaState state,
     string chunkName,
     int lineDefined,
     int lastLineDefined,
@@ -19,9 +21,24 @@ public sealed class Prototype(
     UpValueDesc[] upValues
 )
 {
+    internal readonly LuaGlobalState GlobalState = state.GlobalState;
+    public LuaState State => GlobalState.MainThread;
     public ReadOnlySpan<LuaValue> Constants => constants;
 
     public ReadOnlySpan<Instruction> Code => code;
+
+    public Instruction GetInstruction(int index)
+    {
+        if (index < 0 || index >= code.Length)
+            throw new ArgumentOutOfRangeException(nameof(index));
+        var instruction = code[index];
+        if (instruction.OpCode == DebugUtility.DebugBreakInstruction.OpCode && GlobalState.Debugger is { } debugger) // DebugBreak
+        {
+            instruction = debugger.GetOriginalInstruction(this, index);
+        }
+
+        return instruction;
+    }
 
     public ReadOnlySpan<Prototype> ChildPrototypes => childPrototypes;
 
@@ -47,12 +64,13 @@ public sealed class Prototype(
     /// <summary>
     ///  Converts a Lua bytecode to a Prototype object.
     /// </summary>
+    /// <param name="state">the Lua state</param>
     /// <param name="span">binary bytecode</param>
     /// <param name="name">chunk name</param>
     /// <returns></returns>
-    public static Prototype FromByteCode(ReadOnlySpan<byte> span, ReadOnlySpan<char> name)
+    public static Prototype FromByteCode(LuaState state, ReadOnlySpan<byte> span, ReadOnlySpan<char> name)
     {
-        return Parser.UnDump(span, name);
+        return Parser.UnDump(state, span, name);
     }
 
     /// <summary>

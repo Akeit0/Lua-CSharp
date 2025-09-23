@@ -28,8 +28,9 @@ public sealed class TableLibrary
 
     public readonly LibraryFunction[] Functions;
 
+    static readonly LuaState dummyState = LuaState.Create();
     // TODO: optimize
-    static readonly Prototype defaultComparer = new(
+    static readonly Prototype defaultComparer = new(dummyState,
         "comp", 0, 0, 2, 2, false,
         [],
         [

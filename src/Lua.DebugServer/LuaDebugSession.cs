@@ -19,6 +19,7 @@ sealed class LuaDebugSession
     int lastDepth;
     LuaState? lastThread;
 
+    Exception ? lastException;
     int stepDepth;
 
     // Desired user breakpoints by chunk with options (condition, hitCondition, logMessage)
@@ -146,6 +147,7 @@ sealed class LuaDebugSession
             debugger?.DeleteStepBreak();
         }
 
+        debugger?.BreakWithError = false;
         pauseTcs?.TrySetResult(true);
         RpcServer.Publish("continued", new { threadId = 1, allThreadsContinued = true });
     }
@@ -168,8 +170,43 @@ sealed class LuaDebugSession
         this.state = state;
         debugger = dbg;
     }
+    
 
-    public static Task PauseForBreakpoint(string file, int line, string reason = "breakpoint")
+    public static Task PauseForException(string file, int line, Exception exception)
+    {
+        var s = Current;
+
+        if (s is null)
+        {
+            RpcServer.Publish("output", new { category = "stderr", output = "[Lua.DebugServer] Warning: Breakpoint hit but no debug session is active.\n" });
+            return Task.CompletedTask;
+        }
+        s.lastException = exception;
+        Task toWait;
+        string? publishReason = null;
+        lock (s.locals) // use _locals list as a simple sync object; replaced below by _sync if added
+        {
+            if (s.pauseTcs is null || s.pauseTcs.Task.IsCompleted)
+            {
+                s.pauseTcs = new(TaskCreationOptions.RunContinuationsAsynchronously);
+                publishReason = s.isSteppingNext ? "step" : "exception";
+                s.isSteppingNext = false;
+            }
+
+            toWait = s.pauseTcs.Task;
+        }
+
+        if (publishReason is not null)
+        {
+            // Try to resolve to an absolute filesystem path using cwd and package.path
+            var resolved = s?.ResolveSourcePath(file) ?? file;
+            RpcServer.Publish("stopped", new { reason = publishReason, threadId = 1, file = resolved, line,exception = new { type = exception.GetType().FullName, message = exception.Message, stack = exception.StackTrace}});
+        }
+
+        RpcServer.Publish("wait", new { reason = "started", threadId = 1 });
+        return toWait;
+    }
+    public static Task Pause(string file, int line, string reason)
     {
         var s = Current;
 
@@ -202,6 +239,10 @@ sealed class LuaDebugSession
 
         RpcServer.Publish("wait", new { reason = "started", threadId = 1 });
         return toWait;
+    }
+    public static Task PauseForBreakpoint(string file, int line)
+    {
+       return Pause(file, line, "breakpoint");
     }
 
     string? ResolveSourcePath(string chunk)

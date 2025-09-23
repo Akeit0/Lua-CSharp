@@ -5,6 +5,7 @@ namespace Lua.CodeAnalysis.Compilation;
 
 class PrototypeBuilder : IPoolNode<PrototypeBuilder>
 {
+    internal LuaState state;
     internal FastListCore<LuaValue> ConstantsList;
 
     public ReadOnlySpan<LuaValue> Constants => ConstantsList.AsSpan();
@@ -35,9 +36,10 @@ class PrototypeBuilder : IPoolNode<PrototypeBuilder>
     public bool IsVarArg;
 
 
-    internal PrototypeBuilder(string source)
+    internal PrototypeBuilder(string source, LuaState state)
     {
         Source = source;
+        this.state = state;
     }
 
     static LinkedPool<PrototypeBuilder> pool;
@@ -47,14 +49,15 @@ class PrototypeBuilder : IPoolNode<PrototypeBuilder>
 
     ref PrototypeBuilder? IPoolNode<PrototypeBuilder>.NextNode => ref nextNode;
 
-    internal static PrototypeBuilder Get(string source)
+    internal static PrototypeBuilder Get(LuaState state,string source)
     {
         if (!pool.TryPop(out var f))
         {
-            f = new(source);
+            f = new(source,state);
         }
 
         f.Source = source;
+        f.state = state;
         return f;
     }
 
@@ -77,7 +80,7 @@ class PrototypeBuilder : IPoolNode<PrototypeBuilder>
             protoTypes[i] = Prototypes[i].CreatePrototypeAndRelease(); //ref
         }
 
-        Prototype p = new(Source, LineDefined, LastLineDefined, ParameterCount, MaxStackSize, IsVarArg, Constants.ToArray(), Code.ToArray(), protoTypes, LineInfo.ToArray(), LocalVariables.ToArray(), UpValues.ToArray());
+        Prototype p = new(state,Source, LineDefined, LastLineDefined, ParameterCount, MaxStackSize, IsVarArg, Constants.ToArray(), Code.ToArray(), protoTypes, LineInfo.ToArray(), LocalVariables.ToArray(), UpValues.ToArray());
         Release();
         return p;
     }

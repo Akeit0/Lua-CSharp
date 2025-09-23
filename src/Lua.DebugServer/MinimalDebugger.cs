@@ -28,6 +28,8 @@ class MinimalDebugger : IDebugger
     readonly Dictionary<string, List<int>> pending = new();
     readonly Dictionary<string, Prototype> protos = new();
     readonly Dictionary<string, HashSet<int>> instrPending = new(StringComparer.Ordinal);
+    internal bool BreakWithError { get; set; }= false;
+    
 
     // Expose search by file/line across registered prototypes
     public (Prototype? proto, int pc) FindPrototypeBySource(string file, int line)
@@ -163,6 +165,7 @@ class MinimalDebugger : IDebugger
         }
     }
 
+
     public async ValueTask<Instruction> HandleDebugBreak(LuaState thread, int pc, LuaClosure closure)
     {
         lastThread = thread;
@@ -281,7 +284,7 @@ class MinimalDebugger : IDebugger
                 var file = proto.ChunkName.TrimStart('@');
                 var line = proto.LineInfo[pc];
                 var task=LuaDebugSession.PauseForBreakpoint(file, line);
-               await OnContinue.Invoke(task);
+                await OnContinue.Invoke(task);
             }
 
             // If any step was active, clean them all up (regardless of where we stopped)
@@ -493,6 +496,7 @@ class MinimalDebugger : IDebugger
     public bool SetStepToNext(Prototype proto, int pc, bool stepIn = false)
     {
         pushCount = 0;
+        if(BreakWithError) return false;
         // Restore any previous step trap and remove it from the breakpoint map
         DeleteStepBreak();
         stepMode = StepMode.Over;
@@ -642,7 +646,7 @@ class MinimalDebugger : IDebugger
                 var file = p.ChunkName.TrimStart('@');
                 var line = p.LineInfo[callPc];
                 RpcServer.WriteLogToConsole($"[Lua.DebugServer] Step-Out to {file}:{line} (instruction {callPc})");
-                await OnContinue.Invoke(LuaDebugSession.PauseForBreakpoint(file, line));
+                await OnContinue(LuaDebugSession.PauseForBreakpoint(file, line));
 
             }
             else
@@ -650,6 +654,29 @@ class MinimalDebugger : IDebugger
                 RpcServer.WriteLogToConsole($"[Lua.DebugServer] OnPopCallStackFrame: caller is not a LuaClosure");
             }
         }
+    }
+
+    public async ValueTask OnError(LuaState thread, Exception ex)
+    {
+        var frames = thread.GetCallStackFrames();
+        lastThread = thread;
+        for (int i = frames.Length-2; i >0; i--)
+        {
+            var f = frames[i];
+            if (f.Function is LuaClosure clo)
+            {
+                BreakWithError = true;
+                var pc = frames[i+1].CallerInstructionIndex;
+                var p = clo.Proto;
+                LuaDebugSession.Current?.UpdateStoppedContext(thread, pc, clo);
+                var file = p.ChunkName.TrimStart('@');
+                var line = p.LineInfo[pc];
+                RpcServer.WriteToConsole($"[Lua.DebugServer] Pause Error: {ex.Message} pc:{pc} line:{line}", "stderr");
+                await OnContinue.Invoke(LuaDebugSession.PauseForException(file, line , ex));
+                return;
+            }
+        }
+       
     }
 
     // Helpers to start step-in/out from session

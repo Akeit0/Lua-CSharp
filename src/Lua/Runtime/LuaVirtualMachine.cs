@@ -259,12 +259,11 @@ public static partial class LuaVirtualMachine
         public async ValueTask<int> ExecuteClosureAsyncImpl()
         {
             var returnFrameBase = CurrentReturnFrameBase;
-            var toCatchFlag = false;
+            var toCatchFlag = true;
             try
             {
                 while (MoveNext(this))
                 {
-                    toCatchFlag = true;
                     var r = await Task;
                     Task = default;
                     if (PostOperation is not (PostOperationType.TailCall or PostOperationType.DontPop or PostOperationType.DebugResume))
@@ -282,8 +281,8 @@ public static partial class LuaVirtualMachine
                     }
 
                     toCatchFlag = false;
-
                     ThrowIfCancellationRequested();
+                    toCatchFlag = true;
                 }
 
                 return State.Stack.Count - returnFrameBase;
@@ -293,8 +292,13 @@ public static partial class LuaVirtualMachine
                 if (toCatchFlag)
                 {
                     State.CloseUpValues(FrameBase);
+                    if (GlobalState.Debugger is { } debugger)// && (e is not LuaRuntimeException {InnerException: not null })
+                    {
+                        await debugger.OnError(State, e);
+                    }
                     if (e is not (LuaRuntimeException or LuaCanceledException))
                     {
+                        
                         Exception newException = e is OperationCanceledException ? new LuaCanceledException(State, CancellationToken, e) : new LuaRuntimeException(State, e);
                         PopOnTopCallStackFrames();
                         throw newException;
@@ -357,7 +361,7 @@ public static partial class LuaVirtualMachine
 
     static bool MoveNext(VirtualMachineExecutionContext context)
     {
-        try
+        //try
         {
             // This is a label to restart the execution when new function is called or restarted
         Restart:
@@ -987,19 +991,7 @@ public static partial class LuaVirtualMachine
             context.PostOperation = PostOperationType.None;
             return false;
         }
-        catch (Exception e)
-        {
-            context.State.CloseUpValues(context.FrameBase);
-            if (e is not (LuaRuntimeException or LuaCanceledException))
-            {
-                Exception newException = e is OperationCanceledException ? new LuaCanceledException(context.State, context.CancellationToken, e) : new LuaRuntimeException(context.State, e);
-                context.PopOnTopCallStackFrames();
-                throw newException;
-            }
-
-            context.PopOnTopCallStackFrames();
-            throw;
-        }
+        
     }
 
 
